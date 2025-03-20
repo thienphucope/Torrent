@@ -1,0 +1,16 @@
+G-HCM
+• Kết quả: 5/5 người thực hiện thành công mà không cần hỗ trợ.
+• Quan sát:
+– Tất cả đều đăng nhập thành công
+Đối với Task 2, kết quả test như sau:
+• Kết quả: 5/5 người thực hiện thành công mà không cần hỗ trợ.
+• Quan sát:
+– Dòng định hướng của giao diện hợp lý, người dùng thực hiện các thao tác mà không
+cần phải quay lại hoặc chuyển đổi qua lại giữa các trang.
+– Tìm kiếm được sách họ muốn một cách nhanh chóng.
+Đối với Task 3, kết quả test như sau:
+• Kết quả: 5/5 người thực hiện thành công mà không cần hỗ trợ.
+• Quan sát:
+– Thông báo tải sách lên thành công chưa trực quan nên có 2 người mất khoảng 15s
+mới nhận ra mình đã tải lên thành công.
+Trang 32/32

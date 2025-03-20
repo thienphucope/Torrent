@@ -1,0 +1,25 @@
+ase name Xem thống sách
+Decription Quản trị viên xem thống kê về số lượt đọc đọc của một cuốn sách
+Actors Quản trị viên
+Preconditions Quản trị viên đã đăng nhập
+Quản trị viên yêu cầu xem thống kê của sách trong danh sách
+Triggers Quản trị viên chọn nút "Thống kê"
+Normal flow 1. Quản trị viên chọn nút "Thống kê"
+2. Hệ thống sẽ lấy các số liệu của sách từ cơ sở dữ liệu
+3. Hệ thống đưa ra thông số về lượt đọc của sách
+Exception flows Không
+Alternative flows Không
+Postconditions Quản trị viên có thể theo dõi thông số của sách
+Trang 10/32
+TRƯỜNG ĐẠI HỌC BÁCH KHOA - DHQG-HCM
+2.2 Activity Diagram
+Hình 1: Quản lý sách
+Mô tả: Diagram này mô tả cả quá trình quản lí sách của quản trị viên và các hoạt động quản
+trị viên có thể làm
+Trang 11/32
+TRƯỜNG ĐẠI HỌC BÁCH KHOA - DHQG-HCM
+Hình 2: Xóa sách
+Mô tả: Diagram này mô tả quá trình quản trị viên xóa sách khỏi hệ thống. Đầu tiên quản
+trị viên sẽ truy cập vào trang quản lý sách rồi sẽ chọn sách muốn xóa rồi khi đã chọn đủ số sách
+muốn xóa thì quản trị viên sẽ chọn xóa sách. Khi đó hệ thống sẽ nhận yêu cầu từ quản trị viên
+và lấy thông tin của câc sách rồi gửi lại t

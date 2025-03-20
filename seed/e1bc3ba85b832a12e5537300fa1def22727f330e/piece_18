@@ -1,0 +1,26 @@
+ xóa tài khoản người dùng.
+– Cập nhật thông tin cá nhân và mật khẩu cho quản trị viên.
+• BookController: Quản lý sách:
+– Thêm mới, chỉnh sửa và xóa sách trong thư viện.
+• CategoryController: Quản lý thể loại sách:
+– Thêm mới, chỉnh sửa, và xóa các thể loại.
+• StatisticsController: Thống kê lượt xem sách và gửi dữ liệu cho View.
+Trang 24/32
+TRƯỜNG ĐẠI HỌC BÁCH KHOA - DHQG-HCM
+2. Người dùng:
+Model (M)
+• User: Quản lý tài khoản và thông tin người dùng.
+– register(), login(), logout(), change_password(), update_profile()
+• Book: Quản lý sách, cung cấp thông tin cho người dùng về:
+– view_book_details(), search_books()
+• ReadingHistory: Lưu trữ lịch sử các cuốn sách mà người dùng đã đọc.
+– add_to_history(), get_reading_history()
+View (V)
+• Trang người dùng:
+– Đăng ký và đăng nhập: Giao diện để người dùng đăng ký tài khoản mới và đăng
+nhập vào hệ thống.
+– Cập nhật thông tin cá nhân: Cho phép người dùng cập nhật thông tin cá nhân
+và đổi mật khẩu.
+– Danh sách sách và chi tiết sách: Giao diện hiển thị sách có trong thư viện với các
+chi tiết như tác giả, mô tả, thể loại, năm xuất bản.
+– Tìm kiếm sách: Giao diện để tìm sách theo tên, tác gi�

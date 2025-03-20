@@ -1,0 +1,30 @@
+RƯỜNG ĐẠI HỌC BÁCH KHOA - DHQG-HCM
+Hình 11: Thêm sách lên hệ thống
+Hình 12: Giao diện quản lý
+Trang 22/32
+TRƯỜNG ĐẠI HỌC BÁCH KHOA - DHQG-HCM
+3 Kiến trúc hệ thống
+3.1 Kiến trúc MVC
+Hình 13: Sơ đồ MVC
+Trang 23/32
+TRƯỜNG ĐẠI HỌC BÁCH KHOA - DHQG-HCM
+1. Quản trị viên:
+Model (M)
+• User: Quản lý thông tin người dùng, bao gồm các thao tác:
+– create_user(), update_user(), delete_user(), get_user_info()
+• Book: Quản lý sách trong thư viện:
+– add_book(), edit_book(), delete_book(), get_book_info()
+• Category: Quản lý các thể loại sách:
+– add_category(), edit_category(), delete_category(), list_categories()
+• Statistics: Quản lý và lưu trữ số lượt xem của từng cuốn sách.
+View (V)
+• Trang quản trị viên:
+– Quản lý người dùng: Giao diện để thêm, sửa, hoặc xóa tài khoản người dùng.
+– Quản lý thể loại sách: Giao diện để thêm, sửa và xóa các thể loại sách.
+– Quản lý sách: Giao diện để thêm, sửa, và xóa sách trong thư viện.
+– Thống kê sách: Giao diện hiển thị số lượt xem của từng sách.
+– Cập nhật thông tin cá nhân: Giao diện để quản trị viên thay đổi thông tin và mật
+khẩu cá nhân.
+Controller (C)
+• UserController: Quản lý người dùng:
+– Thêm mới, chỉnh sửa và

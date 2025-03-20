@@ -1,0 +1,26 @@
+ đảm bảo rằng người dùng có thể truy cập vào thư
+viện sách mọi lúc. Việc duy trì tính khả dụng này có thể đạt được thông qua việc sử dụng
+máy chủ ổn định và bảo trì thường xuyên.
+• Tương thích với các trình duyệt phổ biến: Hệ thống cần hoạt động tốt trên các trình duyệt
+phổ biến như Chrome, Firefox, Safari và Edge. Điều này có thể đạt được bằng cách kiểm
+tra và tối ưu hóa mã nguồn cho các trình duyệt này.
+• Hướng dẫn sử dụng: Cung cấp tài liệu hướng dẫn hoặc hướng dẫn trực tuyến đơn giản để
+hỗ trợ người dùng mới trong việc sử dụng nền tảng. Tài liệu có thể là video hoặc tóm tắt
+ngắn gọn.
+Trang 4/32
+TRƯỜNG ĐẠI HỌC BÁCH KHOA - DHQG-HCM
+2 Mô hình hệ thống
+2.1 Use-case Diagram
+Trang 5/32
+TRƯỜNG ĐẠI HỌC BÁCH KHOA - DHQG-HCM
+Trang 6/32
+TRƯỜNG ĐẠI HỌC BÁCH KHOA - DHQG-HCM
+Use-case name Quản lý sách
+Decription Quản trị viên thực hiện những thay đổi và quan sát cần thiết đối
+với sách trong hệ thống
+Actors Quản trị viên
+Preconditions Quản trị viên đăng nhập vào hệ thống
+Triggers Quản trị viên đưa ra yêu cầu quản lý sách
+Normal flow
+1. Quản trị viên chọn nút "quản lý sách"
+2. Hệ thống sẽ đưa ra da

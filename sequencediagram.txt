@@ -1,0 +1,99 @@
+# https://sequencediagram.org/
+
+@startuml
+actor User
+participant "Tracker" as Tracker
+participant "Peer1 (Seeder)" as Peer1
+participant "Peer2 (Leecher)" as Peer2
+participant "Peer3 (Leecher)" as Peer3
+
+== Initialization ==
+User -> Tracker: start_server()
+Tracker -> Tracker: Initialize (host=localhost, port=8000)
+User -> Peer1: start()
+Peer1 -> Peer1: listen_for_peers() [Thread]
+User -> Peer2: start()
+Peer2 -> Peer2: listen_for_peers() [Thread]
+
+== Seeding (Peer1) ==
+User -> Peer1: seed("example.txt")
+Peer1 -> Peer1: split_file("example.txt") into seed/<torrent_hash>/piece_{i}
+note right: Pieces saved to disk
+Peer1 -> Peer1: calculate SHA-1 hashes
+Peer1 -> Tracker: HTTP GET /register?torrent_hash=<hash>&peer_id=<id>&port=6881
+Tracker -> Tracker: handle_registration(<hash>, <id>, ip=127.0.0.1, port=6881)
+Tracker -> Peer1: {status: "registered"}
+Peer1 -> User: "Seeding <torrent_hash>"
+
+== Downloading (Peer2) ==
+User -> Peer2: download(<torrent_hash>, "downloaded_example.txt", piece_count=3)
+Peer2 -> Peer2: Initialize downloads6882/<torrent_hash>/piece_{i} paths
+Peer2 -> Tracker: HTTP GET /register?torrent_hash=<hash>&peer_id=<id>&port=6882
+Tracker -> Tracker: handle_registration(<hash>, <id>, ip=127.0.0.1, port=6882)
+Tracker -> Peer2: {status: "registered"}
+Peer2 -> Tracker: HTTP GET /get_peers?torrent_hash=<hash>
+Tracker -> Tracker: handle_get_peers(<hash>)
+Tracker -> Peer2: {peers: [{ip: "127.0.0.1", port: 6881}]}
+Peer2 -> Peer1: HANDSHAKE <torrent_hash>
+Peer1 -> Peer2: HANDSHAKE <torrent_hash> <peer_id>
+Peer2 -> Peer1: BITFIELD 0,0,0
+Peer1 -> Peer2: BITFIELD 1,1,1
+loop For each piece i (0 to 2)
+    Peer2 -> Peer1: REQUEST i
+    Peer1 -> Peer1: Read seed/<torrent_hash>/piece_{i}
+    Peer1 -> Peer2: Send piece_data
+    Peer2 -> Peer2: Write downloads6882/<torrent_hash>/piece_{i}
+    Peer2 -> Peer2: Update bitfield[i] = 1
+end
+Peer2 -> Peer2: periodic_peer_lookup(<torrent_hash>) [Thread]
+
+== Peer3 Joins ==
+User -> Peer3: start()
+Peer3 -> Peer3: listen_for_peers() [Thread]
+User -> Peer3: download(<torrent_hash>, "downloaded_example.txt", piece_count=3)
+Peer3 -> Peer3: Initialize downloads6883/<torrent_hash>/piece_{i} paths
+Peer3 -> Tracker: HTTP GET /register?torrent_hash=<hash>&peer_id=<id>&port=6883
+Tracker -> Tracker: handle_registration(<hash>, <id>, ip=127.0.0.1, port=6883)
+Tracker -> Peer3: {status: "registered"}
+Peer3 -> Tracker: HTTP GET /get_peers?torrent_hash=<hash>
+Tracker -> Tracker: handle_get_peers(<hash>)
+Tracker -> Peer3: {peers: [{ip: "127.0.0.1", port: 6881}, {ip: "127.0.0.1", port: 6882}]}
+
+== Peer3 Downloads from Peer1 ==
+Peer3 -> Peer1: HANDSHAKE <torrent_hash>
+Peer1 -> Peer3: HANDSHAKE <torrent_hash> <peer_id>
+Peer3 -> Peer1: BITFIELD 0,0,0
+Peer1 -> Peer3: BITFIELD 1,1,1
+Peer3 -> Peer1: REQUEST 1
+Peer1 -> Peer1: Read seed/<torrent_hash>/piece_1
+Peer1 -> Peer3: Send piece_data
+Peer3 -> Peer3: Write downloads6883/<torrent_hash>/piece_1
+
+== Peer3 Downloads from Peer2 ==
+Peer3 -> Peer2: HANDSHAKE <torrent_hash>
+Peer2 -> Peer3: HANDSHAKE <torrent_hash> <peer_id>
+Peer3 -> Peer2: BITFIELD 0,1,0
+Peer2 -> Peer3: BITFIELD 1,1,1
+Peer3 -> Peer2: REQUEST 0
+Peer2 -> Peer2: Read downloads6882/<torrent_hash>/piece_0
+Peer2 -> Peer3: Send piece_data
+Peer3 -> Peer3: Write downloads6883/<torrent_hash>/piece_0
+
+== Peer2 Assembles File ==
+Peer2 -> Peer2: assemble_file(<torrent_hash>)
+loop For each piece i in downloads6882/<torrent_hash>/piece_{i}
+    Peer2 -> Peer2: Read piece_{i} and verify SHA-1
+    Peer2 -> Peer2: Write to downloads6882/downloaded_example.txt
+end
+Peer2 -> Tracker: HTTP GET /status?torrent_hash=<hash>&peer_id=<id>&status=completed
+Tracker -> Tracker: handle_status(<hash>, <id>, "completed")
+Tracker -> Peer2: {status: "completed"}
+
+== Shutdown ==
+User -> Peer2: exit()
+Peer2 -> Tracker: HTTP GET /status?torrent_hash=<hash>&peer_id=<id>&status=stopped
+Tracker -> Tracker: handle_status(<hash>, <id>, "stopped")
+Tracker -> Peer2: {status: "stopped"}
+Peer2 -> Peer2: running = False
+
+@enduml

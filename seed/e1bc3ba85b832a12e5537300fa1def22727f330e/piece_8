@@ -1,0 +1,31 @@
+nh sách các sách với mỗi sách sẽ có các
+nút "Chỉnh sửa","Thống kê" và "Xóa" để quản trị viên chọn để
+thực hiện thay đổi hoặc theo dõi cần thiết. Hệ thống cũng sẽ có
+nút "Thêm" ở đầu danh sách
+3. Quản trị viên chọn một nút
+4. Hệ thống cập nhật danh sách để đáp lại những chỉnh
+sửa của quản trị viên
+Exception flows Không
+Alternative flows Không
+Extension Points
+3a. Quản trị viên chọn nút "Thêm"
+Use-case "Thêm sách" bắt đầu
+3b. Quản trị viên chọn nút "Chỉnh sửa"
+Use-case "Chỉnh sửa thông tin sách" bắt đầu
+3c. Quản trị viên chọn nút "Xóa"
+Use-case "Xóa sách" bắt đầu
+3d. Quản trị viên chọn nút "Thống kê"
+Use-case "Xem thống kê sách" bắt đầu
+Postconditions Hệ thống cập nhật thay đổi của quản trị viên vào cơ sở dữ liệu
+hoặc quản trị viên nhận được thống kê của sách
+Trang 7/32
+TRƯỜNG ĐẠI HỌC BÁCH KHOA - DHQG-HCM
+Use-case name Thêm sách
+Decription Quản trị viên thêm 1 sách vào danh sách các sách
+Actors Quản trị viên
+Preconditions Quản trị viên đã đăng nhập
+Quản trị viên yêu cầu thêm sách vào hệ thống
+Triggers Quản trị viên chọn nút "Thêm"
+Normal flow
+1. Quản trị viên chọn nút "Thêm"
+2. Hệ thống sẽ đưa ra biểu mẫu 

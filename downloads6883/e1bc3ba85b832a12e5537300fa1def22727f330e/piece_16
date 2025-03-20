@@ -1,0 +1,34 @@
+ember - Lấy thông tin hồ sơ của thành viên dựa trên ID.
+• Quan hệ:
+– Quản lý cả danh sách thành viên (Member) và danh sách sách (Book).
+Class Book
+• Thuộc tính:
+– id: str - Mã định danh của sách.
+– genre: list<str> - Danh sách thể loại mà sách thuộc về.
+• Phương thức:
+– method1(Type): Type - Một phương thức tùy chỉnh liên quan đến sách.
+– method2(Type, Type): Type - Một phương thức tùy chỉnh khác.
+Class Log
+• Thuộc tính:
+– timestamp: Date - Dấu thời gian ghi nhận hoạt động.
+– action: str - Hoạt động được thực hiện (ví dụ: tìm kiếm, xem sách, v.v.).
+– userID: str - Mã định danh của người dùng thực hiện hành động.
+• Quan hệ:
+– Kết nối với lớp Member (1 người dùng có thể có nhiều log để theo dõi hoạt động).
+Class History Module
+• Phương thức:
+– viewHistory(): list<time> - Lấy danh sách thời gian của lịch sử đọc.
+Class View Module
+• Phương thức:
+– search(str): Book - Tìm kiếm sách theo từ khóa.
+– viewBook(id: str): Book - Xem thông tin chi tiết về sách dựa trên ID.
+Trang 19/32
+TRƯỜNG ĐẠI HỌC BÁCH KHOA - DHQG-HCM
+2.5 Giao diện
+Hình 8: Trang chủ
+Trang 20/32
+TRƯỜNG ĐẠI HỌC BÁCH KHOA - DHQG-HCM
+Hình 9: Đăng nhập
+Hình 10: Sau khi đăng nhập
+Trang 21/32
+T

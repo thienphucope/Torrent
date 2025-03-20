@@ -1,0 +1,17 @@
+ập các chức năng quản trị.
+• Hệ thống phải cung cấp chức năng cho quản trị viên tạo mới tài khoản người dùng, chỉnh
+sửa thông tin tài khoản hiện có, và xóa tài khoản khi cần thiết.
+• Hệ thống phải cung cấp chức năng để quản trị viên thêm mới các thể loại sách vào thư
+viện, chỉnh sửa các thể loại đã có, và xóa thể loại khi cần.
+• Hệ thống phải cho phép quản trị viên thêm sách mới, chỉnh sửa thông tin sách hiện có (bao
+gồm tựa đề, tác giả, mô tả, thể loại, và năm xuất bản), và xóa sách khỏi thư viện.
+• Hệ thống phải có chức năng thống kê số lượt xem của từng cuốn sách, cho phép quản trị
+viên theo dõi mức độ phổ biến của các đầu sách.
+• Hệ thống phải cho phép quản trị viên thay đổi và cập nhật thông tin cá nhân của họ, bao
+gồm mật khẩu và các chi tiết liên hệ.
+Người dùng:
+• Hệ thống phải cho phép người dùng đăng ký tài khoản mới với tên người dùng, mật khẩu
+và thông tin cá nhân cần thiết.
+• Hệ thống phải cung cấp chức năng đăng nhập cho người dùng đã có tài khoản, cũng như
+cho phép họ đăng xuất sau khi hoàn tất phiên làm việc.
+• Hệ thống phải cho phép người dùng đổ

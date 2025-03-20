@@ -1,0 +1,30 @@
+
+– Một sách có thể được quản lý bởi nhiều quản trị viên.
+– Một sách có thể thuộc (has) nhiều thể loại.
+– Một sách có thể có (has) một thống kê duy nhất.
+3.5.5 Thể loại (Genre):
+Lưu trữ thông tin về thể loại sách.
+• Thuộc tính:
+– Mã thể loại (genre_id): INT(10)
+– Tên thể loại (name): CHAR(100)
+• Mối liên kết: Một thể loại có thể chứa nhiều sách.
+3.5.6 Thống kê (Statistics):
+Lưu trữ dữ liệu về lượt xem và lượt thích của sách.
+• Thuộc tính:
+– Mã thống kê (statistics_id): INT(10)
+– Lượt xem (view_count): INT(10)
+– Lượt thích (like_count): INT(10)
+• Mối liên kết: Một sách chỉ có một thống kê duy nhất.
+Trang 29/32
+TRƯỜNG ĐẠI HỌC BÁCH KHOA - DHQG-HCM
+4 Test hệ thống
+4.1 Online Repository Setup
+Nhóm đã set up xong một repository cho dự án sử dụng Github. Tất cả các thành viên của nhóm
+đều đã được thêm vào dự án. Đây là link dẫn đến repository của dự án.
+Hình 16: Repository trên Github
+4.2 Usability test
+Usability test giúp phát hiện vấn đề trong thiết kế sản phẩm, tìm ra cơ hội cải thiện và hiểu rõ
+hơn về hành vi, sở thích của người sử dụng.
+4.2.1 Chuẩn bị
+a) Mục tiêu:
+• Đánh giá tính dễ sử dụng của giao diện hệ

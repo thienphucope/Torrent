@@ -1,0 +1,19 @@
+i mật khẩu của họ bất cứ khi nào cần, đảm bảo
+tăng cường tính bảo mật cá nhân.
+• Hệ thống phải cung cấp chức năng để người dùng chỉnh sửa và cập nhật thông tin cá nhân
+của mình, bao gồm tên, email, và các chi tiết khác.
+• Hệ thống phải cho phép người dùng xem chi tiết thông tin về các cuốn sách có trong thư
+viện, bao gồm tác giả, thể loại, mô tả, số trang, và năm xuất bản.
+• Hệ thống phải cung cấp một công cụ tìm kiếm cho phép người dùng tìm sách dựa trên tiêu
+chí như tên sách, tác giả, hoặc thể loại.
+• Hệ thống phải cho phép người dùng đọc sách trực tiếp trên nền tảng với giao diện thân
+thiện.
+• Hệ thống phải lưu lại lịch sử của những cuốn sách mà người dùng đã hoàn thành đọc, cho
+phép họ xem lại danh sách các cuốn sách đã đọc trước đó.
+Trang 3/32
+TRƯỜNG ĐẠI HỌC BÁCH KHOA - DHQG-HCM
+1.4 Yêu cầu phi chức năng
+• Giao diện người dùng thân thiện: Hệ thống phải có giao diện đơn giản, dễ sử dụng và trực
+quan, cho phép người dùng dễ dàng tìm kiếm và đọc sách. Điều này có thể đạt được bằng
+cách thiết kế giao diện rõ ràng và dễ hiểu.
+• Tính khả dụng tối thiểu: Hệ thống phải

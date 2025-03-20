@@ -1,0 +1,32 @@
+
+4. Quản trị viên xác nhận biểu mẫu
+5. Hệ thống xác thực biểu mẫu
+6. Hệ thống thay đổi thông tin của sách, thông báo cho quản trị
+viên và trở về trang danh sách
+Exception flows
+2a. Nếu quản trị viên hủy biểu mẫu thì hệ thống sẽ trở về trang
+quản lý sách
+5a. Nếu hệ thống trả về false thì quản trị viên sẽ được thông báo
+và yêu cầu điền lại biểu mẫu
+Alternative flows Không
+Postconditions Hệ thống sẽ cập nhật danh sách các sách với sách mới được thêm
+vào
+Use-case name Xóa sách
+Decription Quản trị viên sách ra khỏi danh sách các sách
+Actors Quản trị viên
+Preconditions Quản trị viên đã đăng nhập
+Quản trị viên yêu cầu xóa sách trong danh sách
+Triggers Quản trị viên chọn nút "Chỉnh sửa"
+Normal flow
+1. Quản trị viên chọn nút "Xóa"
+2. Hệ thống sẽ đưa ra các thông tin về sách
+để quản trị viên xác nhận trước khi xóa
+3. Quản trị viên xác nhận xóa sách
+4. Hệ thống xóa sách ra khỏi danh sách
+Exception flows 2a. Nếu quản trị viên hủy xóa thì hệ thống sẽ trở về trang quản
+lý sách
+Alternative flows Không
+Postconditions Hệ thống sẽ cập nhật danh sách các sách với sách vừa bị xóa
+Trang 9/32
+TRƯỜNG ĐẠI HỌC BÁCH KHOA - DHQG-HCM
+Use-c
