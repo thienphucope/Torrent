@@ -4,26 +4,32 @@ import json
 import threading
 import time
 from http.server import BaseHTTPRequestHandler
+import hashlib
 
 class Tracker:
     def __init__(self, host='localhost', port=8000):
         self.host = host
         self.port = port
-        self.torrents = {}
-        self.file_name_to_hash = {}
+        self.torrents = {}  # Keyed by torrent_hash
+        self.torrent_name_to_hash = {}  # Maps torrent name to torrent_hash
         self.lock = threading.Lock()
         print(f"Tracker initialized at {host}:{port}")
 
+    def calculate_torrent_hash(self, metadata):
+        """Calculate torrent hash from metadata."""
+        metadata_str = json.dumps(metadata, sort_keys=True)
+        return hashlib.sha256(metadata_str.encode()).hexdigest()
+
     def handle_share(self, data):
         with self.lock:
-            required_fields = ['file_hash', 'file_name', 'pieces', 'peer_id', 'port']
+            required_fields = ['metadata', 'peer_id', 'port']
             for field in required_fields:
                 if field not in data:
                     return {"error": f"Missing required field: {field}"}
             
-            file_hash = data['file_hash']
+            metadata = data['metadata']
             peer_id = data['peer_id']
-            pieces = data['pieces']
+            pieces = metadata.get('pieces', [])
             
             if not isinstance(pieces, list) or not pieces:
                 return {"error": "Invalid or empty 'pieces' data"}
@@ -33,16 +39,15 @@ class Tracker:
             except (KeyError, TypeError):
                 return {"error": "Invalid pieces format: each piece must have 'size'"}
 
-            if file_hash not in self.torrents:
-                self.torrents[file_hash] = {
-                    "metadata": {
-                        "file_name": data['file_name'],
-                        "pieces": pieces,
-                        "size": sum(piece_sizes)
-                    },
+            torrent_hash = self.calculate_torrent_hash(metadata)
+            
+            if torrent_hash not in self.torrents:
+                self.torrents[torrent_hash] = {
+                    "metadata": metadata,
                     "peers": {}
                 }
-                self.file_name_to_hash[data['file_name']] = file_hash
+                torrent_name = "_".join(f["file_name"] for f in metadata["files"])
+                self.torrent_name_to_hash[torrent_name] = torrent_hash
             
             peer_info = {
                 "ip": data.get('ip', '0.0.0.0'),
@@ -51,100 +56,100 @@ class Tracker:
                 "last_seen": time.time()
             }
             
-            if peer_id in self.torrents[file_hash]["peers"]:
-                print(f"[Tracker] Peer {peer_id} already exists for {file_hash}, updating info")
-                self.torrents[file_hash]["peers"][peer_id].update(peer_info)
+            if peer_id in self.torrents[torrent_hash]["peers"]:
+                print(f"[Tracker] Peer {peer_id} already exists for {torrent_hash}, updating info")
+                self.torrents[torrent_hash]["peers"][peer_id].update(peer_info)
             else:
-                self.torrents[file_hash]["peers"][peer_id] = peer_info
-                print(f"[Tracker] Added new peer {peer_id} for {file_hash}")
+                self.torrents[torrent_hash]["peers"][peer_id] = peer_info
+                print(f"[Tracker] Added new peer {peer_id} for {torrent_hash}")
             
-            return {"status": "success", "file_hash": file_hash}
+            return {"status": "success", "torrent_hash": torrent_hash}
 
     def handle_update_status(self, data):
         with self.lock:
-            required_fields = ['file_hash', 'peer_id', 'status']
+            required_fields = ['torrent_hash', 'peer_id', 'status']
             for field in required_fields:
                 if field not in data:
                     return {"error": f"Missing required field: {field}"}
             
-            file_hash = data['file_hash']
+            torrent_hash = data['torrent_hash']
             peer_id = data['peer_id']
             status = data['status']
             
-            if file_hash not in self.torrents or peer_id not in self.torrents[file_hash]["peers"]:
-                return {"error": "Peer or file not found"}
+            if torrent_hash not in self.torrents or peer_id not in self.torrents[torrent_hash]["peers"]:
+                return {"error": "Peer or torrent not found"}
             
             if status == "stop":
-                del self.torrents[file_hash]["peers"][peer_id]
-                print(f"[Tracker] Removed peer {peer_id} from {file_hash} due to stop status")
-                if not self.torrents[file_hash]["peers"]:
-                    file_name = self.torrents[file_hash]["metadata"]["file_name"]
-                    del self.torrents[file_hash]
-                    if file_name in self.file_name_to_hash:
-                        del self.file_name_to_hash[file_name]
-                    print(f"[Tracker] Removed torrent {file_hash} as no peers remain")
+                del self.torrents[torrent_hash]["peers"][peer_id]
+                print(f"[Tracker] Removed peer {peer_id} from {torrent_hash} due to stop status")
+                if not self.torrents[torrent_hash]["peers"]:
+                    torrent_name = "_".join(f["file_name"] for f in self.torrents[torrent_hash]["metadata"]["files"])
+                    del self.torrents[torrent_hash]
+                    if torrent_name in self.torrent_name_to_hash:
+                        del self.torrent_name_to_hash[torrent_name]
+                    print(f"[Tracker] Removed torrent {torrent_hash} as no peers remain")
             else:
-                self.torrents[file_hash]["peers"][peer_id]["status"] = status
-                self.torrents[file_hash]["peers"][peer_id]["last_seen"] = time.time()
-                print(f"[Tracker] Updated status for peer {peer_id} in {file_hash} to {status}")
+                self.torrents[torrent_hash]["peers"][peer_id]["status"] = status
+                self.torrents[torrent_hash]["peers"][peer_id]["last_seen"] = time.time()
+                print(f"[Tracker] Updated status for peer {peer_id} in {torrent_hash} to {status}")
             
             return {"status": "success"}
 
     def handle_clear_peer(self, peer_id):
         with self.lock:
             removed = False
-            for file_hash in list(self.torrents.keys()):
-                if peer_id in self.torrents[file_hash]["peers"]:
-                    del self.torrents[file_hash]["peers"][peer_id]
-                    print(f"[Tracker] Cleared peer {peer_id} from {file_hash}")
+            for torrent_hash in list(self.torrents.keys()):
+                if peer_id in self.torrents[torrent_hash]["peers"]:
+                    del self.torrents[torrent_hash]["peers"][peer_id]
+                    print(f"[Tracker] Cleared peer {peer_id} from {torrent_hash}")
                     removed = True
-                    if not self.torrents[file_hash]["peers"]:
-                        file_name = self.torrents[file_hash]["metadata"]["file_name"]
-                        del self.torrents[file_hash]
-                        if file_name in self.file_name_to_hash:
-                            del self.file_name_to_hash[file_name]
-                        print(f"[Tracker] Removed torrent {file_hash} as no peers remain")
+                    if not self.torrents[torrent_hash]["peers"]:
+                        torrent_name = "_".join(f["file_name"] for f in self.torrents[torrent_hash]["metadata"]["files"])
+                        del self.torrents[torrent_hash]
+                        if torrent_name in self.torrent_name_to_hash:
+                            del self.torrent_name_to_hash[torrent_name]
+                        print(f"[Tracker] Removed torrent {torrent_hash} as no peers remain")
             if removed:
                 return {"status": "success"}
             return {"status": "no_change"}
 
-    def handle_get_file_hash(self, file_name):
+    def handle_get_torrent_hash(self, torrent_name):
         with self.lock:
-            file_hash = self.file_name_to_hash.get(file_name)
-            if file_hash:
-                return {"file_hash": file_hash}
-            return {"error": "File name not found"}
+            torrent_hash = self.torrent_name_to_hash.get(torrent_name)
+            if torrent_hash:
+                return {"torrent_hash": torrent_hash}
+            return {"error": "Torrent name not found"}
 
     def handle_get_metadata(self, data):
-        file_hash = data.get("file_hash")
-        if not file_hash:
-            return {"error": "Missing file_hash"}
+        torrent_hash = data.get("torrent_hash")
+        if not torrent_hash:
+            return {"error": "Missing torrent_hash"}
         with self.lock:
-            if file_hash not in self.torrents:
-                return {"error": "File not found"}
-            return {"status": "success", "metadata": self.torrents[file_hash]["metadata"]}
+            if torrent_hash not in self.torrents:
+                return {"error": "Torrent not found"}
+            return {"status": "success", "metadata": self.torrents[torrent_hash]["metadata"]}
 
     def handle_get_peers(self, data):
-        file_hash = data.get("file_hash")
-        if not file_hash:
-            return {"error": "Missing file_hash"}
+        torrent_hash = data.get("torrent_hash")
+        if not torrent_hash:
+            return {"error": "Missing torrent_hash"}
         with self.lock:
-            if file_hash not in self.torrents:
+            if torrent_hash not in self.torrents:
                 return {"peers": []}
             active_peers = [
                 {"ip": peer["ip"], "port": peer["port"], "peer_id": peer_id, "status": peer["status"]}
-                for peer_id, peer in self.torrents[file_hash]["peers"].items()
+                for peer_id, peer in self.torrents[torrent_hash]["peers"].items()
             ]
             return {"peers": active_peers}
 
     def handle_discover(self):
         with self.lock:
             files = [{
-                "file_name": info["metadata"]["file_name"],
-                "hash": file_hash,
-                "size": info["metadata"]["size"],
+                "torrent_name": "_".join(f["file_name"] for f in info["metadata"]["files"]),
+                "hash": torrent_hash,
+                "size": sum(f["file_size"] for f in info["metadata"]["files"]),
                 "active_peers": len(info["peers"])
-            } for file_hash, info in self.torrents.items()]
+            } for torrent_hash, info in self.torrents.items()]
             return {"files": files}
 
 class TrackerHandler(BaseHTTPRequestHandler):
@@ -174,8 +179,8 @@ class TrackerHandler(BaseHTTPRequestHandler):
                 response = self.server.tracker.handle_discover()
             elif data["action"] == "get_metadata":
                 response = self.server.tracker.handle_get_metadata(data)
-            elif data["action"] == "get_file_hash":
-                response = self.server.tracker.handle_get_file_hash(data.get("file_name", ""))
+            elif data["action"] == "get_torrent_hash":  # Renamed to get_torrent_hash
+                response = self.server.tracker.handle_get_torrent_hash(data.get("torrent_name", ""))
             elif data["action"] == "clear_peer":
                 response = self.server.tracker.handle_clear_peer(data.get("peer_id", ""))
             else:
