@@ -78,8 +78,10 @@ class Tracker:
                 del self.torrents[file_hash]["peers"][peer_id]
                 print(f"[Tracker] Removed peer {peer_id} from {file_hash} due to stop status")
                 if not self.torrents[file_hash]["peers"]:
+                    file_name = self.torrents[file_hash]["metadata"]["file_name"]
                     del self.torrents[file_hash]
-                    del self.file_name_to_hash[data['metadata']['file_name']]
+                    if file_name in self.file_name_to_hash:
+                        del self.file_name_to_hash[file_name]
                     print(f"[Tracker] Removed torrent {file_hash} as no peers remain")
             else:
                 self.torrents[file_hash]["peers"][peer_id]["status"] = status
@@ -87,6 +89,24 @@ class Tracker:
                 print(f"[Tracker] Updated status for peer {peer_id} in {file_hash} to {status}")
             
             return {"status": "success"}
+
+    def handle_clear_peer(self, peer_id):
+        with self.lock:
+            removed = False
+            for file_hash in list(self.torrents.keys()):
+                if peer_id in self.torrents[file_hash]["peers"]:
+                    del self.torrents[file_hash]["peers"][peer_id]
+                    print(f"[Tracker] Cleared peer {peer_id} from {file_hash}")
+                    removed = True
+                    if not self.torrents[file_hash]["peers"]:
+                        file_name = self.torrents[file_hash]["metadata"]["file_name"]
+                        del self.torrents[file_hash]
+                        if file_name in self.file_name_to_hash:
+                            del self.file_name_to_hash[file_name]
+                        print(f"[Tracker] Removed torrent {file_hash} as no peers remain")
+            if removed:
+                return {"status": "success"}
+            return {"status": "no_change"}
 
     def handle_get_file_hash(self, file_name):
         with self.lock:
@@ -156,6 +176,8 @@ class TrackerHandler(BaseHTTPRequestHandler):
                 response = self.server.tracker.handle_get_metadata(data)
             elif data["action"] == "get_file_hash":
                 response = self.server.tracker.handle_get_file_hash(data.get("file_name", ""))
+            elif data["action"] == "clear_peer":
+                response = self.server.tracker.handle_clear_peer(data.get("peer_id", ""))
             else:
                 response = {"error": "Invalid action"}
             

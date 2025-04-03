@@ -60,11 +60,11 @@ class TrackerCommunication:
         resp = self.send_to_tracker({"action": "get_file_hash", "file_name": file_name})
         return resp.get("file_hash") if resp else None
 
-    def register_peer(self, file_hash, peer_id, port, ip, pieces):
+    def register_peer(self, file_hash, peer_id, port, ip, pieces, file_name):
         resp = self.send_to_tracker({
             "action": "share",
             "file_hash": file_hash,
-            "file_name": "downloaded_torrent",
+            "file_name": file_name,
             "pieces": pieces,
             "peer_id": peer_id,
             "port": port,
@@ -87,11 +87,18 @@ class TrackerCommunication:
     def discover_files(self):
         return self.send_to_tracker({"action": "discover"})
 
+    def clear_peer(self, peer_id):
+        resp = self.send_to_tracker({"action": "clear_peer", "peer_id": peer_id})
+        return resp and resp.get("status") == "success"
+
 class FileManager:
     def __init__(self, repository, piece_size=512 * 1024):
         self.repository = repository
+        self.shared_files_dir = os.path.join(repository, "shared_files")
+        self.downloads_dir = os.path.join(repository, "downloads")
         self.piece_size = piece_size
-        os.makedirs(self.repository, exist_ok=True)
+        os.makedirs(self.shared_files_dir, exist_ok=True)
+        os.makedirs(self.downloads_dir, exist_ok=True)
 
     def calculate_file_hash(self, file_path):
         sha256 = hashlib.sha256()
@@ -102,6 +109,9 @@ class FileManager:
 
     def split_file(self, file_path, file_hash):
         pieces = []
+        file_name = os.path.basename(file_path)
+        subfolder = os.path.join(self.shared_files_dir, file_name)
+        os.makedirs(subfolder, exist_ok=True)
         try:
             with open(file_path, "rb") as f:
                 i = 0
@@ -110,23 +120,22 @@ class FileManager:
                     if not piece_data:
                         break
                     piece_hash = hashlib.sha1(piece_data).hexdigest()
-                    piece_path = os.path.join(self.repository, f"{file_hash}_piece_{i}")
+                    piece_path = os.path.join(subfolder, f"{file_hash}_piece_{i}")
                     with open(piece_path, "wb") as p:
                         p.write(piece_data)
                     pieces.append({"index": i, "hash": piece_hash, "size": len(piece_data)})
                     i += 1
             if not pieces:
                 raise ValueError("File is empty or unreadable")
-            
+
             metadata = {
-                "file_name": os.path.basename(file_path),
+                "file_name": file_name,
                 "file_size": os.path.getsize(file_path),
                 "piece_size": self.piece_size,
                 "pieces": pieces,
-                "file_hash": file_hash,
-                "files": [{"path": os.path.basename(file_path), "size": os.path.getsize(file_path), "pieces": pieces}]
+                "file_hash": file_hash
             }
-            with open(os.path.join(self.repository, f"{file_hash}_metadata.json"), "w") as f:
+            with open(os.path.join(subfolder, f"{file_hash}_metadata.json"), "w") as f:
                 json.dump(metadata, f)
             return pieces
         except Exception as e:
@@ -134,25 +143,32 @@ class FileManager:
             return []
 
     def save_metadata(self, file_hash, metadata):
-        metadata_path = os.path.join(self.repository, f"{file_hash}_metadata.json")
+        subfolder = os.path.join(self.downloads_dir, metadata["file_name"])
+        os.makedirs(subfolder, exist_ok=True)
+        metadata_path = os.path.join(subfolder, f"{file_hash}_metadata.json")
         with open(metadata_path, "w") as f:
             json.dump(metadata, f)
         print(f"[FILE DEBUG] Saved metadata to {metadata_path}\n")
 
-    def get_existing_pieces(self, file_hash):
+    def get_existing_pieces(self, file_hash, file_name, is_shared=False):
+        folder = self.shared_files_dir if is_shared else self.downloads_dir
+        subfolder = os.path.join(folder, file_name)
+        if not os.path.exists(subfolder):
+            return set()
         pieces = set()
-        for f in os.listdir(self.repository):
+        for f in os.listdir(subfolder):
             if f.startswith(f"{file_hash}_piece_"):
                 try:
                     piece_idx = int(f.split('_')[-1])
                     pieces.add(piece_idx)
                 except ValueError:
                     continue
-        print(f"[FILE DEBUG] Existing pieces for {file_hash}: {pieces}\n")
+        print(f"[FILE DEBUG] Existing pieces for {file_hash} in {subfolder}: {pieces}\n")
         return pieces
 
-    def reconstruct_file(self, file_hash):
-        metadata_path = os.path.join(self.repository, f"{file_hash}_metadata.json")
+    def reconstruct_file(self, file_hash, file_name):
+        subfolder = os.path.join(self.downloads_dir, file_name)
+        metadata_path = os.path.join(subfolder, f"{file_hash}_metadata.json")
         print(f"[FILE DEBUG] Checking metadata at: {metadata_path}\n")
         if not os.path.exists(metadata_path):
             print("[-] Metadata not found\n")
@@ -160,96 +176,92 @@ class FileManager:
 
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
-        
-        if "files" in metadata:
-            for file_info in metadata["files"]:
-                output_path = os.path.join(self.repository, file_info["path"])
-                os.makedirs(os.path.dirname(output_path), exist_ok=True)
-                temp_path = output_path + ".temp"
-                try:
-                    with open(temp_path, "wb") as out_file:
-                        for piece in file_info["pieces"]:
-                            piece_path = os.path.join(self.repository, f"{file_hash}_piece_{piece['index']}")
-                            if not os.path.exists(piece_path):
-                                print(f"[-] Missing piece {piece['index']} for {file_info['path']}\n")
-                                os.remove(temp_path)
-                                return False
-                            with open(piece_path, "rb") as piece_file:
-                                out_file.write(piece_file.read())
-                    os.replace(temp_path, output_path)
-                    print(f"[+] Reconstructed file: {output_path}\n")
-                except Exception as e:
-                    print(f"[-] Error reconstructing {file_info['path']}: {str(e)}\n")
-                    if os.path.exists(temp_path):
+
+        output_path = os.path.join(self.repository, file_name)
+        temp_path = output_path + ".temp"
+        try:
+            with open(temp_path, "wb") as out_file:
+                for piece in metadata["pieces"]:
+                    piece_path = os.path.join(subfolder, f"{file_hash}_piece_{piece['index']}")
+                    if not os.path.exists(piece_path):
+                        print(f"[-] Missing piece {piece['index']}\n")
                         os.remove(temp_path)
-                    return False
-        else:
-            output_path = os.path.join(self.repository, metadata["file_name"])
-            temp_path = output_path + ".temp"
-            try:
-                with open(temp_path, "wb") as out_file:
-                    for piece in metadata["pieces"]:
-                        piece_path = os.path.join(self.repository, f"{file_hash}_piece_{piece['index']}")
-                        if not os.path.exists(piece_path):
-                            print(f"[-] Missing piece {piece['index']}\n")
-                            os.remove(temp_path)
-                            return False
-                        with open(piece_path, "rb") as piece_file:
-                            out_file.write(piece_file.read())
-                if self.calculate_file_hash(temp_path) == file_hash:
-                    os.replace(temp_path, output_path)
-                    print(f"[+] File reconstructed: {output_path}\n")
-                else:
-                    print("[-] File integrity check failed\n")
-                    os.remove(temp_path)
-                    return False
-            except Exception as e:
-                print(f"[-] Error reconstructing file: {str(e)}\n")
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
+                        return False
+                    with open(piece_path, "rb") as piece_file:
+                        out_file.write(piece_file.read())
+            if self.calculate_file_hash(temp_path) == file_hash:
+                os.replace(temp_path, output_path)
+                print(f"[+] File reconstructed: {output_path}\n")
+            else:
+                print("[-] File integrity check failed\n")
+                os.remove(temp_path)
                 return False
-        
-        # Không gọi cleanup_pieces ở đây nữa, giữ lại pieces để seeding
+        except Exception as e:
+            print(f"[-] Error reconstructing file: {str(e)}\n")
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            return False
         return True
 
-    def cleanup_pieces(self, file_hash):
-        for f in os.listdir(self.repository):
-            if f.startswith(f"{file_hash}_piece_") or f == f"{file_hash}_metadata.json":
-                try:
-                    os.remove(os.path.join(self.repository, f))
-                except:
-                    pass
+    def cleanup_pieces(self, file_hash, file_name, is_shared=False):
+        folder = self.shared_files_dir if is_shared else self.downloads_dir
+        subfolder = os.path.join(folder, file_name)
+        if os.path.exists(subfolder):
+            for f in os.listdir(subfolder):
+                if f.startswith(f"{file_hash}_piece_") or f == f"{file_hash}_metadata.json":
+                    try:
+                        os.remove(os.path.join(subfolder, f))
+                    except:
+                        pass
+            if not os.listdir(subfolder):
+                os.rmdir(subfolder)
 
-    def save_state(self, active_downloads, shared_files, requested_pieces, total_pieces_dict):
-        state = {
-            "active_downloads": {},
-            "shared_files": shared_files,
-            "requested_pieces": {k: list(v) for k, v in requested_pieces.items()}
-        }
-        # Kiểm tra độ dài bitfield trước khi lưu
-        for file_hash, status in active_downloads.items():
-            total_pieces = total_pieces_dict.get(file_hash, status["total_pieces"])
-            downloaded = [i for i in status["downloaded"] if i < total_pieces]  # Loại bỏ chỉ số vượt quá total_pieces
-            state["active_downloads"][file_hash] = {
-                "file_name": status["file_name"],
-                "total_pieces": total_pieces,
-                "downloaded": downloaded,
-                "status": status["status"]
-            }
-        with open(os.path.join(self.repository, "download_state.json"), "w") as f:
-            json.dump(state, f)
+    def scan_shared_files(self):
+        shared = {}
+        for subfolder in os.listdir(self.shared_files_dir):
+            subfolder_path = os.path.join(self.shared_files_dir, subfolder)
+            if not os.path.isdir(subfolder_path):
+                continue
+            for f in os.listdir(subfolder_path):
+                if f.endswith("_metadata.json"):
+                    file_hash = f.replace("_metadata.json", "")
+                    metadata_path = os.path.join(subfolder_path, f)
+                    try:
+                        with open(metadata_path, "r") as mf:
+                            metadata = json.load(mf)
+                        size = metadata.get("file_size", sum(p["size"] for p in metadata["pieces"]))
+                        shared[file_hash] = {
+                            "file_name": subfolder,
+                            "pieces": metadata["pieces"],
+                            "size": size
+                        }
+                    except Exception as e:
+                        print(f"[FILE DEBUG] Error loading shared metadata {metadata_path}: {str(e)}\n")
+        return shared
 
-    def load_state(self):
-        state_path = os.path.join(self.repository, "download_state.json")
-        if os.path.exists(state_path):
-            with open(state_path, "r") as f:
-                state = json.load(f)
-                state["requested_pieces"] = {k: set(v) for k, v in state["requested_pieces"].items()}
-                # Chuyển downloaded thành set
-                for file_hash in state["active_downloads"]:
-                    state["active_downloads"][file_hash]["downloaded"] = set(state["active_downloads"][file_hash]["downloaded"])
-                return state
-        return {"active_downloads": {}, "shared_files": {}, "requested_pieces": {}}
+    def scan_downloads(self):
+        downloads = {}
+        for subfolder in os.listdir(self.downloads_dir):
+            subfolder_path = os.path.join(self.downloads_dir, subfolder)
+            if not os.path.isdir(subfolder_path):
+                continue
+            for f in os.listdir(subfolder_path):
+                if f.endswith("_metadata.json"):
+                    file_hash = f.replace("_metadata.json", "")
+                    metadata_path = os.path.join(subfolder_path, f)
+                    try:
+                        with open(metadata_path, "r") as mf:
+                            metadata = json.load(mf)
+                        downloaded = self.get_existing_pieces(file_hash, subfolder)
+                        downloads[file_hash] = {
+                            "file_name": subfolder,
+                            "total_pieces": len(metadata["pieces"]),
+                            "downloaded": downloaded,
+                            "status": "paused"
+                        }
+                    except Exception as e:
+                        print(f"[FILE DEBUG] Error loading download metadata {metadata_path}: {str(e)}\n")
+        return downloads
 
 class PeerCommunication:
     def __init__(self, peer_port, peer_id, file_manager, log_callback):
@@ -309,7 +321,6 @@ class PeerCommunication:
                         print(f"[PEER DEBUG] Updated bitfield from {peer} for {file_hash}: {remote_bitfield}\n")
                     except json.JSONDecodeError as e:
                         print(f"[PEER DEBUG] Invalid bitfield from {peer}: {str(e)}\n")
-                
                 local_bitfield = self.bitfields.get(file_hash, [])
                 response = f"PONG {file_hash} {json.dumps(local_bitfield)}\n"
                 conn.sendall(response.encode())
@@ -324,21 +335,36 @@ class PeerCommunication:
         while self.is_running:
             try:
                 conn, file_hash, piece_idx, peer = self.upload_queue.get(timeout=1)
-                piece_path = os.path.join(self.file_manager.repository, f"{file_hash}_piece_{piece_idx}")
+                file_name = EnhancedPeer.instance.active_downloads.get(file_hash, {}).get("file_name",
+                            EnhancedPeer.instance.shared_files.get(file_hash, {}).get("file_name", ""))
+                if not file_name:
+                    self.log(f"[UPLOAD] File name not found for {file_hash} to serve {peer}\n")
+                    conn.sendall(b"PIECE_NOT_FOUND")
+                    conn.close()
+                    self.upload_queue.task_done()
+                    continue
+
+                folder = self.file_manager.shared_files_dir if file_hash in EnhancedPeer.instance.shared_files else self.file_manager.downloads_dir
+                piece_path = os.path.join(folder, file_name, f"{file_hash}_piece_{piece_idx}")
+                print(f"[UPLOAD DEBUG] Looking for piece at: {piece_path}\n")
                 if os.path.exists(piece_path):
                     with open(piece_path, "rb") as f:
                         piece_data = f.read()
-                        conn.sendall(piece_data)
+                    conn.sendall(piece_data)
                     bytes_sent = len(piece_data)
-                    self.log(f"[UPLOAD] Sent piece {piece_idx} ({bytes_sent} bytes) to {peer}\n")
+                    self.log(f"[UPLOAD] Sent piece {piece_idx} ({bytes_sent} bytes) to {peer} from {piece_path}\n")
                     self.upload_stats[peer] = self.upload_stats.get(peer, 0) + bytes_sent
                 else:
+                    self.log(f"[UPLOAD] Piece {piece_idx} not found at {piece_path} for {peer}\n")
                     conn.sendall(b"PIECE_NOT_FOUND")
-                    self.log(f"[UPLOAD] Piece {piece_idx} not found for {peer}\n")
                 conn.close()
                 self.upload_queue.task_done()
             except queue.Empty:
                 continue
+            except Exception as e:
+                self.log(f"[UPLOAD] Error serving {peer}: {str(e)}\n")
+                conn.close()
+                self.upload_queue.task_done()
 
     def download_worker(self, peer_ip, peer_port):
         peer = f"{peer_ip}:{peer_port}"
@@ -349,7 +375,8 @@ class PeerCommunication:
             try:
                 file_hash, piece_idx = download_queue.get(timeout=1)
                 if self.download_piece(file_hash, piece_idx, peer_ip, peer_port):
-                    metadata_path = os.path.join(self.file_manager.repository, f"{file_hash}_metadata.json")
+                    file_name = EnhancedPeer.instance.active_downloads[file_hash]["file_name"]
+                    metadata_path = os.path.join(self.file_manager.downloads_dir, file_name, f"{file_hash}_metadata.json")
                     if os.path.exists(metadata_path):
                         with open(metadata_path, "r") as f:
                             metadata = json.load(f)
@@ -379,19 +406,26 @@ class PeerCommunication:
                         if not chunk:
                             break
                         piece_data += chunk
-                    
+
                     if piece_data == b"PIECE_NOT_FOUND":
                         self.log(f"[DOWNLOAD] Piece {piece_idx} not found on {peer}\n")
                         if file_hash in self.current_downloads:
                             self.current_downloads[file_hash].pop(piece_idx, None)
                         return False
-                    
-                    piece_path = os.path.join(self.file_manager.repository, f"{file_hash}_piece_{piece_idx}")
+
+                    file_name = EnhancedPeer.instance.active_downloads.get(file_hash, {}).get("file_name", "")
+                    if not file_name:
+                        self.log(f"[DOWNLOAD] File name not found for {file_hash} during download\n")
+                        return False
+
+                    piece_path = os.path.join(self.file_manager.downloads_dir, file_name, f"{file_hash}_piece_{piece_idx}")
+                    os.makedirs(os.path.dirname(piece_path), exist_ok=True)
+                    print(f"[DOWNLOAD DEBUG] Saving piece to: {piece_path}\n")
                     with open(piece_path, "wb") as f:
                         f.write(piece_data)
                     bytes_received = len(piece_data)
-                    self.log(f"[DOWNLOAD] Downloaded piece {piece_idx} ({bytes_received} bytes) from {peer}\n")
-                    
+                    self.log(f"[DOWNLOAD] Downloaded piece {piece_idx} ({bytes_received} bytes) from {peer} to {piece_path}\n")
+
                     if file_hash in self.bitfields:
                         self.bitfields[file_hash][piece_idx] = 1
                     self.download_stats[peer] = self.download_stats.get(peer, 0) + bytes_received
@@ -429,7 +463,7 @@ class PeerCommunication:
                 print(f"[PEER DEBUG] Sent to {peer}: {message.strip()}\n")
                 response = s.recv(1024).decode().strip()
                 print(f"[PEER DEBUG] Received response from {peer}: {response}\n")
-                
+
                 if response.startswith("PONG"):
                     parts = response.split(" ", 2)
                     if len(parts) > 2:
@@ -451,43 +485,64 @@ class EnhancedPeer:
     instance = None
 
     def __init__(self, tracker_host="localhost", tracker_port=8000, peer_port=8001):
-        self.peer_id = hashlib.sha256(str(time.time()).encode()).hexdigest()[:20]
+        self.ip = self.get_local_ip()
+        self.peer_id = hashlib.sha256(f"{self.ip}:{peer_port}".encode()).hexdigest()[:20]
         self.is_running = True
         self.lock = threading.Lock()
         self.executor = ThreadPoolExecutor(max_workers=10)
         self.repository = f"./repository_{peer_port}"
-        
         self.tracker = TrackerCommunication(tracker_host, tracker_port)
         self.file_manager = FileManager(self.repository)
         self.root = tk.Tk()
         self.peer_comm = PeerCommunication(peer_port, self.peer_id, self.file_manager, self.log_to_ui)
-        self.setup_ui()
-        
-        state = self.file_manager.load_state()
-        self.active_downloads = state["active_downloads"]
-        self.shared_files = state["shared_files"]
-        self.peer_comm.requested_pieces = state["requested_pieces"]
-        
+        self.shared_files_frame = None
+        self.discover_frame = None
+        self.shared_files_widgets = {}
+        self.discover_widgets = {}
+        self.status_widgets = {}
+        self.log_queue = queue.Queue()
+
+        # Load from disk and sync with tracker
+        self.shared_files = self.file_manager.scan_shared_files()
+        self.active_downloads = self.file_manager.scan_downloads()
+        self.peer_comm.requested_pieces = {}
+        for file_hash, info in self.active_downloads.items():
+            self.peer_comm.bitfields[file_hash] = [1 if i in info["downloaded"] else 0 for i in range(info["total_pieces"])]
+        for file_hash in self.shared_files:
+            self.peer_comm.bitfields[file_hash] = [1] * len(self.shared_files[file_hash]["pieces"])
+
         EnhancedPeer.instance = self
-        
+        self.setup_ui()
+        self.sync_with_tracker()
+
         self.log_to_ui(f"Peer ID: {self.peer_id}\n")
         self.log_to_ui(f"Using repository: {self.repository}\n")
+        self.root.after(100, self.process_log_queue)
 
     def log_to_ui(self, message):
-        self.log_text.config(state=tk.NORMAL)
-        self.log_text.insert(tk.END, message)
-        self.log_text.see(tk.END)
-        self.log_text.config(state=tk.DISABLED)
+        self.log_queue.put(message)
+
+    def process_log_queue(self):
+        try:
+            while not self.log_queue.empty():
+                message = self.log_queue.get_nowait()
+                self.log_text.config(state=tk.NORMAL)
+                self.log_text.insert(tk.END, message)
+                self.log_text.see(tk.END)
+                self.log_text.config(state=tk.DISABLED)
+        except Exception as e:
+            print(f"[UI ERROR] Log processing failed: {str(e)}\n")
+        if self.is_running:
+            self.root.after(100, self.process_log_queue)
 
     def setup_ui(self):
         self.root.title(f"Peer-to-Peer Client (Port: {self.peer_comm.peer_port})")
         self.root.geometry("800x600")
+        self.root.protocol("WM_DELETE_WINDOW", self.graceful_exit)
 
         button_frame = ttk.Frame(self.root, padding="10")
         button_frame.pack(fill=tk.X)
-
         ttk.Button(button_frame, text="Discover", command=lambda: threading.Thread(target=self.handle_discover, daemon=True).start()).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="List", command=lambda: threading.Thread(target=self.list_shared_files, daemon=True).start()).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Exit", command=self.graceful_exit).pack(side=tk.RIGHT, padx=5)
 
         share_frame = ttk.Frame(self.root, padding="10")
@@ -497,183 +552,319 @@ class EnhancedPeer:
         self.share_entry.pack(side=tk.LEFT, padx=5)
         ttk.Button(share_frame, text="Share", command=lambda: threading.Thread(target=self.share_file, args=(self.share_entry.get(),), daemon=True).start()).pack(side=tk.LEFT)
 
-        download_frame = ttk.Frame(self.root, padding="10")
-        download_frame.pack(fill=tk.X)
-        ttk.Label(download_frame, text="Download (Hash/Name):").pack(side=tk.LEFT)
-        self.download_entry = ttk.Entry(download_frame, width=40)
-        self.download_entry.pack(side=tk.LEFT, padx=5)
-        self.resume_var = tk.BooleanVar()
-        ttk.Checkbutton(download_frame, text="Resume", variable=self.resume_var).pack(side=tk.LEFT, padx=5)
-        ttk.Button(download_frame, text="Download", command=lambda: threading.Thread(target=self.download_file, args=(self.download_entry.get(), self.resume_var.get()), daemon=True).start()).pack(side=tk.LEFT)
+        self.shared_files_frame = ttk.LabelFrame(self.root, text="Shared Files", padding="10")
+        self.shared_files_frame.pack(fill=tk.X, padx=10, pady=5)
+        self.update_shared_files_ui()
 
-        self.status_frame = ttk.Frame(self.root, padding="10")
-        self.status_frame.pack(fill=tk.X)
-        self.status_bars = {}
+        self.discover_frame = ttk.LabelFrame(self.root, text="Discovered Files", padding="10")
+        self.discover_frame.pack(fill=tk.X, padx=10, pady=5)
+        self.update_discover_ui([])  # Initialize empty
+
+        self.status_frame = ttk.LabelFrame(self.root, text="Downloads", padding="10")
+        self.status_frame.pack(fill=tk.X, padx=10, pady=5)
 
         self.log_text = scrolledtext.ScrolledText(self.root, height=15, width=90, state=tk.DISABLED)
         self.log_text.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
 
         self.root.after(1000, self.update_status_ui)
 
+    def update_shared_files_ui(self):
+        try:
+            for widget in self.shared_files_frame.winfo_children():
+                widget.destroy()
+            self.shared_files_widgets.clear()
+
+            with self.lock:
+                if not self.shared_files:
+                    ttk.Label(self.shared_files_frame, text="No files currently shared").pack()
+                else:
+                    for file_hash, info in self.shared_files.items():
+                        frame = ttk.Frame(self.shared_files_frame)
+                        frame.pack(fill=tk.X, pady=2)
+                        label = ttk.Label(frame, text=f"{info['file_name']} (Hash: {file_hash[:8]}...)")
+                        label.pack(side=tk.LEFT)
+                        stop_button = ttk.Button(frame, text="Stop Sharing",
+                                                command=lambda fh=file_hash: threading.Thread(target=self.stop_sharing, args=(fh,), daemon=True).start())
+                        stop_button.pack(side=tk.RIGHT)
+                        self.shared_files_widgets[file_hash] = (frame, label, stop_button)
+        except Exception as e:
+            self.log_to_ui(f"[UI ERROR] Failed to update shared files UI: {str(e)}\n")
+
+    def update_discover_ui(self, discovered_files):
+        try:
+            for widget in self.discover_frame.winfo_children():
+                widget.destroy()
+            self.discover_widgets.clear()
+
+            if not discovered_files:
+                ttk.Label(self.discover_frame, text="No files discovered yet").pack()
+            else:
+                for file in discovered_files:
+                    file_hash = file["hash"]
+                    frame = ttk.Frame(self.discover_frame)
+                    frame.pack(fill=tk.X, pady=2)
+                    peers_info = self.tracker.get_peers(file_hash, self.peer_id)
+                    peers_str = ", ".join([f"{p['peer_id'][:8]}... ({p['ip']}:{p['port']})" for p in peers_info]) if peers_info else "No peers"
+                    label = ttk.Label(frame, text=f"{file['file_name']} (Hash: {file_hash[:8]}..., Peers: {file.get('active_peers', 0)})")
+                    label.pack(side=tk.LEFT)
+                    download_button = ttk.Button(frame, text="Download",
+                                                command=lambda fh=file_hash: threading.Thread(target=self.download_file, args=(fh,), daemon=True).start())
+                    download_button.pack(side=tk.RIGHT)
+                    self.discover_widgets[file_hash] = (frame, label, download_button)
+                    self.log_to_ui(f"[DISCOVER] {file['file_name']} - Hash: {file_hash}, Peers: {peers_str}\n")
+        except Exception as e:
+            self.log_to_ui(f"[UI ERROR] Failed to update discover UI: {str(e)}\n")
+
     def update_status_ui(self):
         if not self.is_running:
             return
-        with self.lock:
-            for file_hash, status in self.active_downloads.items():
-                total = status["total_pieces"]
-                downloaded = status["downloaded"]
-                if file_hash not in self.status_bars:
-                    canvas = tk.Canvas(self.status_frame, height=20, width=300)
-                    canvas.pack(side=tk.LEFT, padx=5)
-                    label = ttk.Label(self.status_frame, text="")
-                    label.pack(side=tk.LEFT)
-                    self.status_bars[file_hash] = (canvas, label)
-                
-                canvas, label = self.status_bars[file_hash]
-                canvas.delete("all")
-                piece_width = 300 / total
-                for i in range(total):
-                    color = "green" if i in downloaded else "grey"
-                    canvas.create_rectangle(i * piece_width, 0, (i + 1) * piece_width, 20, fill=color, outline="black")
-                
-                downloading_info = ""
-                if file_hash in self.peer_comm.current_downloads:
-                    for piece_idx, peer in self.peer_comm.current_downloads[file_hash].items():
-                        downloading_info += f"Piece {piece_idx} from {peer}, "
-                label.config(text=f"{file_hash[:8]}...: {len(downloaded)}/{total} {downloading_info.rstrip(', ')}")
-            
-            completed = [fh for fh in self.status_bars if fh not in self.active_downloads]
-            for fh in completed:
-                canvas, label = self.status_bars.pop(fh)
-                canvas.destroy()
-                label.destroy()
-        
-        self.root.after(1000, self.update_status_ui)
+        try:
+            for file_hash in list(self.status_widgets.keys()):
+                if file_hash not in self.active_downloads:
+                    frame, canvas, label, resume_btn, pause_btn = self.status_widgets.pop(file_hash)
+                    frame.destroy()
+
+            with self.lock:
+                for file_hash, status in self.active_downloads.items():
+                    total = status["total_pieces"]
+                    downloaded = status["downloaded"]
+                    if file_hash not in self.status_widgets:
+                        frame = ttk.Frame(self.status_frame)
+                        frame.pack(fill=tk.X, pady=2)
+                        canvas = tk.Canvas(frame, height=20, width=300)
+                        canvas.pack(side=tk.LEFT, padx=5)
+                        label = ttk.Label(frame, text="")
+                        label.pack(side=tk.LEFT)
+                        resume_btn = ttk.Button(frame, text="Resume",
+                                                command=lambda fh=file_hash: threading.Thread(target=self.resume_download, args=(fh,), daemon=True).start())
+                        resume_btn.pack(side=tk.RIGHT, padx=2)
+                        pause_btn = ttk.Button(frame, text="Pause",
+                                               command=lambda fh=file_hash: threading.Thread(target=self.pause_download, args=(fh,), daemon=True).start())
+                        pause_btn.pack(side=tk.RIGHT, padx=2)
+                        self.status_widgets[file_hash] = (frame, canvas, label, resume_btn, pause_btn)
+
+                    frame, canvas, label, resume_btn, pause_btn = self.status_widgets[file_hash]
+                    canvas.delete("all")
+                    piece_width = 300 / total
+                    for i in range(total):
+                        color = "green" if i in downloaded else "grey"
+                        canvas.create_rectangle(i * piece_width, 0, (i + 1) * piece_width, 20, fill=color, outline="black")
+
+                    downloading_info = ""
+                    if file_hash in self.peer_comm.current_downloads:
+                        for piece_idx, peer in self.peer_comm.current_downloads[file_hash].items():
+                            downloading_info += f"Piece {piece_idx} from {peer}, "
+                    label.config(text=f"{status['file_name']} ({file_hash[:8]}...): {len(downloaded)}/{total} {downloading_info.rstrip(', ')}")
+                    resume_btn.config(state="normal" if status["status"] == "paused" else "disabled")
+                    pause_btn.config(state="normal" if status["status"] == "downloading" else "disabled")
+        except Exception as e:
+            self.log_to_ui(f"[UI ERROR] Failed to update status UI: {str(e)}\n")
+        if self.is_running:
+            self.root.after(1000, self.update_status_ui)
 
     def start(self):
         threading.Thread(target=self.peer_comm.run_server, daemon=True).start()
         self.log_to_ui(f"\nPeer server running on port {self.peer_comm.peer_port}\n")
         self.root.mainloop()
 
+    def sync_with_tracker(self):
+        self.tracker.clear_peer(self.peer_id)
+        ip = self.get_local_ip()
+        with self.lock:
+            for file_hash, info in self.shared_files.items():
+                if not self.tracker.register_peer(file_hash, self.peer_id, self.peer_comm.peer_port, ip, info["pieces"], info["file_name"]):
+                    self.log_to_ui(f"[-] Failed to sync shared file {file_hash} with tracker\n")
+                else:
+                    self.log_to_ui(f"[+] Synced shared file {file_hash} with tracker\n")
+            for file_hash, info in self.active_downloads.items():
+                if file_hash not in self.shared_files:  # Only register incomplete downloads
+                    pieces = [{"index": i, "hash": "", "size": 0} for i in range(info["total_pieces"]) if i in info["downloaded"]]
+                    if not self.tracker.register_peer(file_hash, self.peer_id, self.peer_comm.peer_port, ip, pieces, info["file_name"]):
+                        self.log_to_ui(f"[-] Failed to sync download {file_hash} with tracker\n")
+                    else:
+                        self.log_to_ui(f"[+] Synced download {file_hash} with tracker\n")
+
     def share_file(self, file_path):
-        full_path = os.path.abspath(file_path)
-        if not os.path.isfile(full_path):
-            self.log_to_ui(f"[-] File not found: {full_path}\n")
-            return False
-        
-        file_hash = self.file_manager.calculate_file_hash(full_path)
-        pieces = self.file_manager.split_file(full_path, file_hash)
-        if not pieces:
-            self.log_to_ui(f"[-] Failed to split file or file is empty: {full_path}\n")
-            return False
-        
-        response = self.tracker.send_to_tracker({
-            "action": "share",
-            "file_hash": file_hash,
-            "file_name": os.path.basename(full_path),
-            "pieces": pieces,
-            "peer_id": self.peer_id,
-            "port": self.peer_comm.peer_port,
-            "ip": self.get_local_ip()
-        })
-        
-        if response and response.get("status") == "success":
+        try:
+            full_path = os.path.abspath(file_path)
+            if not os.path.isfile(full_path):
+                self.log_to_ui(f"[-] File not found: {full_path}\n")
+                return False
+
+            file_hash = self.file_manager.calculate_file_hash(full_path)
+            pieces = self.file_manager.split_file(full_path, file_hash)
+            if not pieces:
+                self.log_to_ui(f"[-] Failed to split file or file is empty: {full_path}\n")
+                return False
+
+            file_name = os.path.basename(full_path)
+            if not self.tracker.register_peer(file_hash, self.peer_id, self.peer_comm.peer_port, self.get_local_ip(), pieces, file_name):
+                self.log_to_ui(f"[-] Failed to share file with tracker\n")
+                return False
+
             self.log_to_ui(f"[+] Shared successfully! File hash: {file_hash}\n")
             with self.lock:
                 self.shared_files[file_hash] = {
-                    "file_name": os.path.basename(full_path),
+                    "file_name": file_name,
                     "pieces": pieces,
                     "size": os.path.getsize(full_path)
                 }
                 self.peer_comm.bitfields[file_hash] = [1] * len(pieces)
+            self.root.after(0, self.update_shared_files_ui)
             return True
-        self.log_to_ui(f"[-] Failed to share file: {response.get('error', 'Unknown error')}\n")
-        return False
+        except Exception as e:
+            self.log_to_ui(f"[ERROR] Share file failed: {str(e)}\n")
+            return False
 
-    def download_file(self, identifier, resume=False):
-        file_hash = identifier if len(identifier) > 8 else self.tracker.get_file_hash_by_name(identifier)
-        if not file_hash:
-            self.log_to_ui(f"[-] File not found: {identifier}\n")
-            return False
-        
-        metadata_resp = self.tracker.get_metadata(file_hash)
-        if not metadata_resp or "metadata" not in metadata_resp:
-            self.log_to_ui(f"[-] Failed to get metadata: {metadata_resp.get('error', 'Unknown error')}\n")
-            return False
-        metadata = metadata_resp["metadata"]
-        print(f"[DOWNLOAD DEBUG] Metadata: {metadata}\n")
-        
-        self.file_manager.save_metadata(file_hash, metadata)
-        
-        with self.lock:
-            if file_hash not in self.active_downloads:
-                self.active_downloads[file_hash] = {
-                    "file_name": metadata["file_name"],
-                    "total_pieces": len(metadata["pieces"]),
-                    "downloaded": set(),
-                    "status": "downloading"
-                }
+    def stop_sharing(self, file_hash):
+        try:
+            with self.lock:
+                if file_hash not in self.shared_files:
+                    self.log_to_ui(f"[-] File {file_hash[:8]}... not found in shared files\n")
+                    return
+                self.tracker.update_status(file_hash, self.peer_id, "stop")
+                self.file_manager.cleanup_pieces(file_hash, self.shared_files[file_hash]["file_name"], is_shared=True)
+                if file_hash in self.peer_comm.bitfields:
+                    del self.peer_comm.bitfields[file_hash]
+                del self.shared_files[file_hash]
+                self.log_to_ui(f"[+] Stopped sharing {file_hash[:8]}... and cleaned up pieces\n")
+            self.root.after(0, self.update_shared_files_ui)
+        except Exception as e:
+            self.log_to_ui(f"[ERROR] Stop sharing failed: {str(e)}\n")
+
+    def download_file(self, file_hash):
+        try:
+            metadata_resp = self.tracker.get_metadata(file_hash)
+            if not metadata_resp or "metadata" not in metadata_resp:
+                self.log_to_ui(f"[-] Failed to get metadata: {metadata_resp.get('error', 'Unknown error')}\n")
+                return False
+            metadata = metadata_resp["metadata"]
+            print(f"[DOWNLOAD DEBUG] Metadata: {metadata}\n")
+
+            self.file_manager.save_metadata(file_hash, metadata)
+
+            with self.lock:
+                if file_hash not in self.active_downloads:
+                    self.active_downloads[file_hash] = {
+                        "file_name": metadata["file_name"],
+                        "total_pieces": len(metadata["pieces"]),
+                        "downloaded": set(),
+                        "status": "downloading"
+                    }
                 if file_hash not in self.peer_comm.bitfields:
                     self.peer_comm.bitfields[file_hash] = [0] * len(metadata["pieces"])
-        
-        if resume:
-            existing_pieces = self.file_manager.get_existing_pieces(file_hash)
-            with self.lock:
-                self.active_downloads[file_hash]["downloaded"].update(existing_pieces)
+                existing_pieces = self.file_manager.get_existing_pieces(file_hash, metadata["file_name"])
+                self.active_downloads[file_hash]["downloaded"] = existing_pieces
                 for idx in existing_pieces:
                     self.peer_comm.bitfields[file_hash][idx] = 1
-            self.log_to_ui(f"[+] Resuming, found {len(existing_pieces)} pieces\n")
-        
-        peers = self.tracker.get_peers(file_hash, self.peer_id)
-        if not peers:
-            self.log_to_ui("[-] No peers available from tracker\n")
+
+            # Immediately start downloading
+            peers = self.tracker.get_peers(file_hash, self.peer_id)
+            if not peers:
+                self.log_to_ui("[-] No peers available from tracker\n")
+                return False
+
+            self.tracker.register_peer(file_hash, self.peer_id, self.peer_comm.peer_port, self.get_local_ip(), metadata["pieces"], metadata["file_name"])
+
+            needed_pieces = [p["index"] for p in metadata["pieces"] if p["index"] not in self.active_downloads[file_hash]["downloaded"]]
+            if not needed_pieces:
+                self.log_to_ui("[+] All pieces already downloaded\n")
+                success = self.file_manager.reconstruct_file(file_hash, metadata["file_name"])
+                if success:
+                    with self.lock:
+                        self.shared_files[file_hash] = {
+                            "file_name": metadata["file_name"],
+                            "pieces": metadata["pieces"],
+                            "size": sum(p["size"] for p in metadata["pieces"])
+                        }
+                        old_folder = os.path.join(self.file_manager.downloads_dir, metadata["file_name"])
+                        new_folder = os.path.join(self.file_manager.shared_files_dir, metadata["file_name"])
+                        if os.path.exists(old_folder):
+                            os.rename(old_folder, new_folder)
+                    self.log_to_ui(f"[+] Download completed, now seeding {file_hash}\n")
+                    self.root.after(0, self.update_shared_files_ui)
+                return True
+
+            self.log_to_ui(f"[+] Starting download of {file_hash[:8]}... with {len(needed_pieces)} pieces from {len(peers)} peers\n")
+            threading.Thread(target=self.parallel_download, args=(file_hash, needed_pieces, peers), daemon=True).start()
+            return True
+        except Exception as e:
+            self.log_to_ui(f"[ERROR] Download failed: {str(e)}\n")
             return False
-        
-        self.tracker.register_peer(file_hash, self.peer_id, self.peer_comm.peer_port, self.get_local_ip(), metadata["pieces"])
-        
-        needed_pieces = [p["index"] for p in metadata["pieces"] if p["index"] not in self.active_downloads[file_hash]["downloaded"]]
-        if not needed_pieces:
-            self.log_to_ui("[+] All pieces already downloaded\n")
-            success = self.file_manager.reconstruct_file(file_hash)
-            if success:
-                with self.lock:
-                    self.shared_files[file_hash] = {
-                        "file_name": metadata["file_name"],
-                        "pieces": metadata["pieces"],
-                        "size": sum(p["size"] for p in metadata["pieces"])
-                    }
+
+    def resume_download(self, file_hash):
+        try:
+            with self.lock:
+                if file_hash not in self.active_downloads:
+                    self.log_to_ui(f"[-] Cannot resume {file_hash[:8]}...: not found\n")
+                    return
+                if self.active_downloads[file_hash]["status"] == "downloading":
+                    self.log_to_ui(f"[-] {file_hash[:8]}... is already downloading\n")
+                    return
+                self.active_downloads[file_hash]["status"] = "downloading"
+
+            metadata_path = os.path.join(self.file_manager.downloads_dir, self.active_downloads[file_hash]["file_name"], f"{file_hash}_metadata.json")
+            with open(metadata_path, "r") as f:
+                metadata = json.load(f)
+
+            peers = self.tracker.get_peers(file_hash, self.peer_id)
+            if not peers:
+                self.log_to_ui("[-] No peers available from tracker\n")
+                return
+
+            self.tracker.register_peer(file_hash, self.peer_id, self.peer_comm.peer_port, self.get_local_ip(), metadata["pieces"], metadata["file_name"])
+
+            needed_pieces = [p["index"] for p in metadata["pieces"] if p["index"] not in self.active_downloads[file_hash]["downloaded"]]
+            if not needed_pieces:
+                self.log_to_ui("[+] All pieces already downloaded\n")
+                success = self.file_manager.reconstruct_file(file_hash, metadata["file_name"])
+                if success:
+                    with self.lock:
+                        self.shared_files[file_hash] = {
+                            "file_name": metadata["file_name"],
+                            "pieces": metadata["pieces"],
+                            "size": sum(p["size"] for p in metadata["pieces"])
+                        }
+                        old_folder = os.path.join(self.file_manager.downloads_dir, metadata["file_name"])
+                        new_folder = os.path.join(self.file_manager.shared_files_dir, metadata["file_name"])
+                        if os.path.exists(old_folder):
+                            os.rename(old_folder, new_folder)
                     self.log_to_ui(f"[+] Download completed, now seeding {file_hash}\n")
-            return success
-        
-        self.log_to_ui(f"[+] Downloading {len(needed_pieces)} pieces from {len(peers)} peers\n")
-        success = self.parallel_download(file_hash, needed_pieces, peers)
-        
-        if success:
-            self.log_to_ui("[+] Reconstructing file...\n")
-            reconstruct_success = self.file_manager.reconstruct_file(file_hash)
-            if reconstruct_success:
-                with self.lock:
-                    self.shared_files[file_hash] = {
-                        "file_name": metadata["file_name"],
-                        "pieces": metadata["pieces"],
-                        "size": sum(p["size"] for p in metadata["pieces"])
-                    }
-                    self.log_to_ui(f"[+] Download completed, now seeding {file_hash}\n")
-            return reconstruct_success
-        self.log_to_ui("[-] Download failed\n")
-        return False
+                    self.root.after(0, self.update_shared_files_ui)
+                return
+
+            self.log_to_ui(f"[+] Resuming download of {file_hash[:8]}... with {len(needed_pieces)} pieces from {len(peers)} peers\n")
+            threading.Thread(target=self.parallel_download, args=(file_hash, needed_pieces, peers), daemon=True).start()
+        except Exception as e:
+            self.log_to_ui(f"[ERROR] Resume failed: {str(e)}\n")
+
+    def pause_download(self, file_hash):
+        try:
+            with self.lock:
+                if file_hash not in self.active_downloads:
+                    self.log_to_ui(f"[-] Cannot pause {file_hash[:8]}...: not found\n")
+                    return
+                if self.active_downloads[file_hash]["status"] == "paused":
+                    self.log_to_ui(f"[-] {file_hash[:8]}... is already paused\n")
+                    return
+                self.active_downloads[file_hash]["status"] = "paused"
+                if file_hash in self.peer_comm.current_downloads:
+                    self.peer_comm.current_downloads[file_hash].clear()
+            self.log_to_ui(f"[+] Paused download of {file_hash[:8]}...\n")
+        except Exception as e:
+            self.log_to_ui(f"[ERROR] Pause failed: {str(e)}\n")
 
     def parallel_download(self, file_hash, needed_pieces, peers):
         print(f"[DOWNLOAD DEBUG] Needed pieces: {needed_pieces}\n")
         print(f"[DOWNLOAD DEBUG] Initial peers: {peers}\n")
-        
+
         if file_hash not in self.peer_comm.requested_pieces:
             self.peer_comm.requested_pieces[file_hash] = set()
-        
+
         remaining_pieces = needed_pieces[:]
         current_peers = peers
-        
-        while remaining_pieces and self.is_running:
+
+        while remaining_pieces and self.is_running and self.active_downloads[file_hash]["status"] == "downloading":
             active_peers = []
             for peer in current_peers[:4]:
                 if self.peer_comm.check_peer_connection(peer["ip"], peer["port"], file_hash, self.peer_id):
@@ -685,29 +876,29 @@ class EnhancedPeer:
                         t.start()
                         self.peer_comm.peer_threads.append(t)
                         print(f"[DOWNLOAD DEBUG] Started worker for {peer_str}\n")
-            
+
             if not active_peers:
                 self.log_to_ui("[DOWNLOAD] No active peers available\n")
-                return False
-            
+                return
+
             piece_rarity = {}
             for idx in remaining_pieces:
-                count = sum(1 for p in active_peers if f"{p['ip']}:{p['port']}" in self.peer_comm.remote_bitfields and 
-                            file_hash in self.peer_comm.remote_bitfields[f"{p['ip']}:{p['port']}"] and 
-                            len(self.peer_comm.remote_bitfields[f"{p['ip']}:{p['port']}"][file_hash]) > idx and 
+                count = sum(1 for p in active_peers if f"{p['ip']}:{p['port']}" in self.peer_comm.remote_bitfields and
+                            file_hash in self.peer_comm.remote_bitfields[f"{p['ip']}:{p['port']}"] and
+                            len(self.peer_comm.remote_bitfields[f"{p['ip']}:{p['port']}"][file_hash]) > idx and
                             self.peer_comm.remote_bitfields[f"{p['ip']}:{p['port']}"][file_hash][idx] == 1)
                 piece_rarity[idx] = count if count > 0 else float('inf')
-            
+
             assigned_pieces = set()
             for peer in active_peers:
                 peer_str = f"{peer['ip']}:{peer['port']}"
                 available_pieces = [
-                    idx for idx in remaining_pieces 
-                    if peer_str in self.peer_comm.remote_bitfields and 
-                    file_hash in self.peer_comm.remote_bitfields[peer_str] and 
-                    len(self.peer_comm.remote_bitfields[peer_str][file_hash]) > idx and 
-                    self.peer_comm.remote_bitfields[peer_str][file_hash][idx] == 1 and 
-                    idx not in self.peer_comm.requested_pieces[file_hash] and 
+                    idx for idx in remaining_pieces
+                    if peer_str in self.peer_comm.remote_bitfields and
+                    file_hash in self.peer_comm.remote_bitfields[peer_str] and
+                    len(self.peer_comm.remote_bitfields[peer_str][file_hash]) > idx and
+                    self.peer_comm.remote_bitfields[peer_str][file_hash][idx] == 1 and
+                    idx not in self.peer_comm.requested_pieces[file_hash] and
                     idx not in assigned_pieces
                 ]
                 if available_pieces:
@@ -718,54 +909,54 @@ class EnhancedPeer:
                     self.peer_comm.download_queues[peer_str].put((file_hash, piece_idx))
                     assigned_pieces.add(piece_idx)
                     print(f"[DOWNLOAD DEBUG] Assigned piece {piece_idx} (rarity: {piece_rarity[piece_idx]}) to {peer_str}\n")
-            
+
             for peer in active_peers:
                 peer_str = f"{peer['ip']}:{peer['port']}"
                 if peer_str in self.peer_comm.download_queues:
                     self.peer_comm.download_queues[peer_str].join()
-            
+
             with self.lock:
                 for piece_idx in needed_pieces:
-                    piece_path = os.path.join(self.file_manager.repository, f"{file_hash}_piece_{piece_idx}")
+                    piece_path = os.path.join(self.file_manager.downloads_dir, self.active_downloads[file_hash]["file_name"], f"{file_hash}_piece_{piece_idx}")
                     if os.path.exists(piece_path) and piece_idx in remaining_pieces:
                         self.active_downloads[file_hash]["downloaded"].add(piece_idx)
                         remaining_pieces.remove(piece_idx)
-            
+
+            if not remaining_pieces:
+                self.log_to_ui("[+] All pieces downloaded\n")
+                success = self.file_manager.reconstruct_file(file_hash, self.active_downloads[file_hash]["file_name"])
+                if success:
+                    with self.lock:
+                        file_name = self.active_downloads[file_hash]["file_name"]
+                        metadata_path = os.path.join(self.file_manager.downloads_dir, file_name, f"{file_hash}_metadata.json")
+                        with open(metadata_path, "r") as f:
+                            metadata = json.load(f)
+                        self.shared_files[file_hash] = {
+                            "file_name": file_name,
+                            "pieces": metadata["pieces"],
+                            "size": sum(p["size"] for p in metadata["pieces"])
+                        }
+                        old_folder = os.path.join(self.file_manager.downloads_dir, file_name)
+                        new_folder = os.path.join(self.file_manager.shared_files_dir, file_name)
+                        if os.path.exists(old_folder):
+                            os.rename(old_folder, new_folder)
+                    self.log_to_ui(f"[+] Download completed, now seeding {file_hash}\n")
+                    self.root.after(0, self.update_shared_files_ui)
+
             current_peers = self.tracker.get_peers(file_hash, self.peer_id)
             print(f"[DOWNLOAD DEBUG] Updated peers: {current_peers}\n")
-        
-        return self.check_complete(file_hash)
-
-    def check_complete(self, file_hash):
-        with self.lock:
-            if file_hash not in self.active_downloads:
-                return False
-            complete = len(self.active_downloads[file_hash]["downloaded"]) == self.active_downloads[file_hash]["total_pieces"]
-            print(f"[DOWNLOAD DEBUG] Download complete check: {len(self.active_downloads[file_hash]['downloaded'])}/{self.active_downloads[file_hash]['total_pieces']}\n")
-            return complete
 
     def handle_discover(self):
-        response = self.tracker.discover_files()
-        if response and "files" in response:
-            self.log_to_ui("\nAvailable files:\n")
-            for file in response["files"]:
-                self.log_to_ui(f"- {file['file_name']} (Hash: {file['hash'][:8]}...) [Peers: {file.get('active_peers', 0)}]\n")
-        else:
-            self.log_to_ui("[-] Failed to discover files\n")
-
-    def list_shared_files(self):
-        self.log_to_ui("\n=== Local shared files ===\n")
-        if not self.shared_files:
-            self.log_to_ui("No local files shared\n")
-        else:
-            for file_hash, info in self.shared_files.items():
-                self.log_to_ui(f"- {info['file_name']} (Hash: {file_hash[:8]}...)\n")
-        
-        response = self.tracker.discover_files()
-        if response and "files" in response:
-            self.log_to_ui("\n=== Tracker files ===\n")
-            for file in response["files"]:
-                self.log_to_ui(f"- {file['file_name']} (Hash: {file['hash'][:8]}...) [Peers: {file.get('active_peers', 0)}]\n")
+        try:
+            response = self.tracker.discover_files()
+            if response and "files" in response:
+                self.root.after(0, lambda: self.update_discover_ui(response["files"]))
+            else:
+                self.log_to_ui("[-] Failed to discover files\n")
+                self.root.after(0, lambda: self.update_discover_ui([]))
+        except Exception as e:
+            self.log_to_ui(f"[ERROR] Discover failed: {str(e)}\n")
+            self.root.after(0, lambda: self.update_discover_ui([]))
 
     def graceful_exit(self):
         self.log_to_ui("\n[+] Shutting down...\n")
@@ -774,29 +965,9 @@ class EnhancedPeer:
         for peer in self.peer_comm.download_queues:
             self.peer_comm.download_queues[peer].put(None)
         self.peer_comm.upload_queue.put(None)
-        
-        with self.lock:
-            # Gửi thông báo dừng tới tracker
-            for file_hash in self.shared_files:
-                self.tracker.update_status(file_hash, self.peer_id, "stop")
-                self.log_to_ui(f"[+] Sent stop status to tracker for shared file {file_hash}\n")
-            for file_hash in self.active_downloads:
-                if file_hash not in self.shared_files:
-                    self.tracker.update_status(file_hash, self.peer_id, "stop")
-                    self.log_to_ui(f"[+] Sent stop status to tracker for downloaded file {file_hash}\n")
-            
-            # Xóa pieces và reset bitfield
-            for file_hash in list(self.active_downloads.keys()) + list(self.shared_files.keys()):
-                self.file_manager.cleanup_pieces(file_hash)
-                if file_hash in self.peer_comm.bitfields:
-                    del self.peer_comm.bitfields[file_hash]
-                self.log_to_ui(f"[+] Cleaned up pieces and reset bitfield for {file_hash}\n")
-            
-            # Lưu state với kiểm tra độ dài
-            total_pieces_dict = {fh: info["total_pieces"] for fh, info in self.active_downloads.items()}
-            self.file_manager.save_state(self.active_downloads, self.shared_files, self.peer_comm.requested_pieces, total_pieces_dict)
-        
-        self.executor.shutdown()
+
+        self.tracker.clear_peer(self.peer_id)
+        self.executor.shutdown(wait=False)
         self.log_to_ui("[+] Peer stopped\n")
         self.root.quit()
 
@@ -821,7 +992,7 @@ if __name__ == "__main__":
             except ValueError as e:
                 print(f"Invalid port: {str(e)}. Using default port 8001.\n")
                 peer_port = 8001
-        
+
         peer = EnhancedPeer(peer_port=peer_port)
         peer.start()
     except Exception as e:
