@@ -1,0 +1,72 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Run tracker.py",
+            "type": "shell",
+            "command": "python",
+            "args": ["tracker.py"],
+            "problemMatcher": [],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "Run peer.py 8001",
+            "type": "shell",
+            "command": "python",
+            "args": ["peer.py", "8001"],
+            "problemMatcher": []
+        },
+        {
+            "label": "Run peer.py 8002",
+            "type": "shell",
+            "command": "python",
+            "args": ["peer.py", "8002"],
+            "problemMatcher": []
+        },
+        {
+            "label": "Run peer.py 8003",
+            "type": "shell",
+            "command": "python",
+            "args": ["peer.py", "8003"],
+            "problemMatcher": []
+        },
+        {
+            "label": "Run peer.py 8004",
+            "type": "shell",
+            "command": "python",
+            "args": ["peer.py", "8004"],
+            "problemMatcher": []
+        },
+        {
+            "label": "Run all scripts",
+            "dependsOn": [
+                "Run tracker.py",
+                "Run peer.py 8001",
+                "Run peer.py 8002",
+                "Run peer.py 8003",
+                "Run peer.py 8004"
+            ],
+            "problemMatcher": [],
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            }
+        },
+        {
+            "label": "Xóa repository folders",
+            "type": "shell",
+            "command": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            "args": [
+                "-Command",
+                "Get-ChildItem -Directory -Filter 'repository_*' | Remove-Item -Recurse -Force"
+            ],
+            "problemMatcher": []
+        }
+        
+        
+        
+    ]
+}
