@@ -5,15 +5,56 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler
 import hashlib
+import socket
 
 class Tracker:
-    def __init__(self, host='localhost', port=8000):
-        self.host = host
+    def __init__(self, port=8000, udp_port=8001):
+        # Lấy IP của máy tự động
+        self.host = self.get_local_ip()
         self.port = port
         self.torrents = {}  # Keyed by torrent_hash
         self.torrent_name_to_hash = {}  # Maps torrent name to torrent_hash
         self.lock = threading.Lock()
-        print(f"Tracker initialized at {host}:{port}")
+        print(f"Tracker initialized at {self.host}:{self.port}")
+        self.udp_port = udp_port
+        threading.Thread(target=self.listen_udp_broadcast, daemon=True).start()  # Start UDP listener
+    
+    def listen_udp_broadcast(self):
+        """Listen for UDP broadcast requests from peers."""
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.bind(('', self.udp_port))
+        print(f"[UDP] Listening for broadcast on UDP port {self.udp_port}")
+
+        while True:
+            try:
+                message, addr = sock.recvfrom(1024)
+                decoded = message.decode()
+                print(f"[UDP] Received from {addr}: {decoded}")
+
+                if decoded.strip().lower() == "where_are_you":
+                    response = json.dumps({
+                        "ip": self.host,
+                        "port": self.port
+                    }).encode()
+                    sock.sendto(response, addr)
+                    print(f"[UDP] Sent tracker info to {addr}")
+            except Exception as e:
+                print(f"[UDP Error] {e}")
+
+    def get_local_ip(self):
+        """Lấy địa chỉ IP của máy hiện tại."""
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            # Kết nối đến một địa chỉ bất kỳ để lấy IP cục bộ
+            s.connect(('8.8.8.8', 1))
+            ip = s.getsockname()[0]
+        except Exception:
+            ip = '127.0.0.1'  # Nếu không lấy được IP, dùng localhost làm mặc định
+        finally:
+            s.close()
+        return ip
 
     def calculate_torrent_hash(self, metadata):
         """Calculate torrent hash from metadata."""

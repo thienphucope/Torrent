@@ -12,11 +12,39 @@ import sys
 import tkinter as tk
 from tkinter import scrolledtext, ttk
 import subprocess
-
+import re
 class TrackerCommunication:
     def __init__(self, tracker_host="localhost", tracker_port=8000):
-        self.tracker_host = tracker_host
-        self.tracker_port = tracker_port
+        if tracker_host == "localhost" or tracker_host == "auto":
+            discovered = self.discover_tracker(broadcast_port=8001)
+            if discovered:
+                self.tracker_host = discovered["ip"]
+                self.tracker_port = discovered["port"]
+                print(f"[Peer] Discovered tracker at {self.tracker_host}:{self.tracker_port}")
+            else:
+                print("[Peer] Failed to discover tracker, using default localhost")
+                self.tracker_host = tracker_host
+                self.tracker_port = tracker_port
+        else:
+            self.tracker_host = tracker_host
+            self.tracker_port = tracker_port
+
+    def discover_tracker(self, broadcast_port=8001, timeout=2):
+        message = "where_are_you"
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.settimeout(timeout)
+
+        try:
+            sock.sendto(message.encode(), ('<broadcast>', broadcast_port))
+            data, addr = sock.recvfrom(1024)
+            response = json.loads(data)
+            print(f"Discovered tracker at {response['ip']}:{response['port']}")
+            return response
+        except socket.timeout:
+            print("Tracker discovery timed out.")
+        finally:
+            sock.close()
 
     def send_to_tracker(self, data):
         max_retries = 3
@@ -121,34 +149,58 @@ class FileManager:
             file_name = os.path.basename(file_path)
             file_hash = self.calculate_file_hash(file_path)
             file_size = os.path.getsize(file_path)
-            metadata["files"].append({"file_name": file_name, "file_hash": file_hash, "file_size": file_size, "offset": total_offset})
+
+            # Điều chỉnh piece_size nếu file lớn hơn 20MB
+            piece_size = file_size // 20 if file_size > 20 * 1024 * 1024 else self.piece_size
+
+            metadata["files"].append({
+                "file_name": file_name,
+                "file_hash": file_hash,
+                "file_size": file_size,
+                "offset": total_offset
+            })
 
             with open(file_path, "rb") as f:
                 while True:
-                    chunk = f.read(self.piece_size - len(buffer))
+                    chunk = f.read(piece_size - len(buffer))
                     if not chunk and not buffer:
                         break
                     buffer.extend(chunk)
 
-                    if len(buffer) >= self.piece_size or (not chunk and buffer):
-                        piece_data = bytes(buffer[:self.piece_size]) if len(buffer) >= self.piece_size else bytes(buffer)
+                    if len(buffer) >= piece_size or (not chunk and buffer):
+                        piece_data = bytes(buffer[:piece_size]) if len(buffer) >= piece_size else bytes(buffer)
                         piece_hash = hashlib.sha1(piece_data).hexdigest()
                         piece_path = os.path.join(subfolder, f"piece_{piece_index}")
+
                         with open(piece_path, "wb") as p:
                             p.write(piece_data)
-                        metadata["pieces"].append({"index": piece_index, "hash": piece_hash, "size": len(piece_data)})
+
+                        metadata["pieces"].append({
+                            "index": piece_index,
+                            "hash": piece_hash,
+                            "size": len(piece_data)
+                        })
+
                         print(f"[FILE DEBUG] Created piece {piece_path} (size: {len(piece_data)} bytes)\n")
+
                         piece_index += 1
-                        buffer = buffer[self.piece_size:] if len(buffer) > self.piece_size else bytearray()
+                        buffer = buffer[piece_size:] if len(buffer) > piece_size else bytearray()
 
             total_offset += file_size
 
         if buffer:
             piece_hash = hashlib.sha1(bytes(buffer)).hexdigest()
             piece_path = os.path.join(subfolder, f"piece_{piece_index}")
+
             with open(piece_path, "wb") as p:
                 p.write(bytes(buffer))
-            metadata["pieces"].append({"index": piece_index, "hash": piece_hash, "size": len(buffer)})
+
+            metadata["pieces"].append({
+                "index": piece_index,
+                "hash": piece_hash,
+                "size": len(buffer)
+            })
+
             print(f"[FILE DEBUG] Created final piece {piece_path} (size: {len(buffer)} bytes)\n")
 
         if not metadata["pieces"]:
@@ -157,7 +209,9 @@ class FileManager:
         torrent_hash = self.calculate_torrent_hash(metadata)
         with open(os.path.join(subfolder, f"{torrent_hash}_metadata.json"), "w") as f:
             json.dump(metadata, f)
+
         print(f"[FILE DEBUG] Metadata saved: {torrent_hash}_metadata.json\n")
+        
         return torrent_hash, metadata["pieces"], metadata
 
     def save_metadata(self, torrent_hash, metadata):
@@ -419,7 +473,10 @@ class PeerCommunication:
         download_queue = self.download_queues[peer]
         while self.is_running:
             try:
-                torrent_hash, piece_idx = download_queue.get(timeout=1)
+                item = download_queue.get(timeout=1)
+                if item is None:  # Sentinel value to exit
+                    break
+                torrent_hash, piece_idx = item
                 if self.download_piece(torrent_hash, piece_idx, peer_ip, peer_port):
                     torrent_name = EnhancedPeer.instance.active_downloads[torrent_hash]["torrent_name"]
                     metadata_path = os.path.join(self.file_manager.downloads_dir, torrent_name, f"{torrent_hash}_metadata.json")
@@ -560,7 +617,7 @@ class EnhancedPeer:
         self.setup_ui()
         self.sync_with_tracker()
 
-        self.log_to_ui(f"Peer ID: {self.peer_id}\n")
+        self.log_to_ui(f"Peer ID: {self.peer_id} - {self.ip}:{peer_port}\n")
         self.log_to_ui(f"Using repository: {self.repository}\n")
         self.root.after(100, self.process_log_queue)
 
@@ -671,8 +728,8 @@ class EnhancedPeer:
         if not self.is_running:
             return
         current_time = time.time()
-        if current_time - self.last_ui_update < 0.5:  # Debounce to 500ms
-            self.root.after(500, self.update_status_ui)
+        if current_time - self.last_ui_update < 0.2:  # Debounce to 500ms
+            self.root.after(200, self.update_status_ui)
             return
         self.last_ui_update = current_time
 
@@ -745,7 +802,7 @@ class EnhancedPeer:
         except Exception as e:
             self.log_to_ui(f"[UI ERROR] Failed to update status UI: {str(e)}\n")
         if self.is_running:
-            self.root.after(1000, self.update_status_ui)
+            self.root.after(200, self.update_status_ui)
 
     def open_folder(self, torrent_name):
         folder_path = os.path.abspath(os.path.join(self.repository, torrent_name))
@@ -842,7 +899,17 @@ class EnhancedPeer:
                     metadata = json.load(f)
                 torrent_hash = self.file_manager.calculate_torrent_hash(metadata)
             else:
-                torrent_hash = identifier
+                # Nếu identifier là magnet link thì trích xuất hash
+                if identifier.startswith("magnet:?"):
+                    match = re.search(r'btih:([a-fA-F0-9]+)', identifier)
+                    if match:
+                        torrent_hash = match.group(1)
+                    else:
+                        self.log_to_ui("[-] Invalid magnet link format.\n")
+                        return False
+                else:
+                    torrent_hash = identifier
+
                 metadata_resp = self.tracker.get_metadata(torrent_hash)
                 if not metadata_resp or "metadata" not in metadata_resp:
                     self.log_to_ui(f"[-] Failed to get metadata: {metadata_resp.get('error', 'Unknown error')}\n")
@@ -982,98 +1049,114 @@ class EnhancedPeer:
         remaining_pieces = needed_pieces[:]
         current_peers = peers
 
-        while remaining_pieces and self.is_running and self.active_downloads[torrent_hash]["status"] == "downloading":
-            active_peers = []
-            for peer in current_peers[:4]:
-                if self.peer_comm.check_peer_connection(peer["ip"], peer["port"], torrent_hash, self.peer_id):
-                    active_peers.append(peer)
+        active_threads = []
+        try:
+            while remaining_pieces and self.is_running and self.active_downloads[torrent_hash]["status"] == "downloading":
+                active_peers = []
+                for peer in current_peers[:4]:
+                    if self.peer_comm.check_peer_connection(peer["ip"], peer["port"], torrent_hash, self.peer_id):
+                        active_peers.append(peer)
+                        peer_str = f"{peer['ip']}:{peer['port']}"
+                        if peer_str not in self.peer_comm.download_queues:
+                            self.peer_comm.download_queues[peer_str] = queue.Queue()
+                            t = threading.Thread(target=self.peer_comm.download_worker, args=(peer["ip"], peer["port"]), daemon=True)
+                            t.start()
+                            active_threads.append(t)
+                            self.peer_comm.peer_threads.append(t)
+                            print(f"[DOWNLOAD DEBUG] Started worker for {peer_str}\n")
+
+                if not active_peers:
+                    self.log_to_ui("[DOWNLOAD] No active peers available\n")
+                    break
+
+                piece_rarity = {}
+                for idx in remaining_pieces:
+                    count = sum(1 for p in active_peers if f"{p['ip']}:{p['port']}" in self.peer_comm.remote_bitfields and
+                                torrent_hash in self.peer_comm.remote_bitfields[f"{p['ip']}:{p['port']}"] and
+                                len(self.peer_comm.remote_bitfields[f"{p['ip']}:{p['port']}"][torrent_hash]) > idx and
+                                self.peer_comm.remote_bitfields[f"{p['ip']}:{p['port']}"][torrent_hash][idx] == 1)
+                    piece_rarity[idx] = count if count > 0 else float('inf')
+
+                assigned_pieces = set()
+                for peer in active_peers:
                     peer_str = f"{peer['ip']}:{peer['port']}"
-                    if peer_str not in self.peer_comm.download_queues:
-                        self.peer_comm.download_queues[peer_str] = queue.Queue()
-                        t = threading.Thread(target=self.peer_comm.download_worker, args=(peer["ip"], peer["port"]), daemon=True)
-                        t.start()
-                        self.peer_comm.peer_threads.append(t)
-                        print(f"[DOWNLOAD DEBUG] Started worker for {peer_str}\n")
+                    available_pieces = [
+                        idx for idx in remaining_pieces
+                        if peer_str in self.peer_comm.remote_bitfields and
+                        torrent_hash in self.peer_comm.remote_bitfields[peer_str] and
+                        len(self.peer_comm.remote_bitfields[peer_str][torrent_hash]) > idx and
+                        self.peer_comm.remote_bitfields[peer_str][torrent_hash][idx] == 1 and
+                        idx not in self.peer_comm.requested_pieces[torrent_hash] and
+                        idx not in assigned_pieces
+                    ]
+                    if available_pieces:
+                        min_rarity = min(piece_rarity[idx] for idx in available_pieces)
+                        rarest_pieces = [idx for idx in available_pieces if piece_rarity[idx] == min_rarity]
+                        piece_idx = random.choice(rarest_pieces)
+                        self.peer_comm.requested_pieces[torrent_hash].add(piece_idx)
+                        self.peer_comm.download_queues[peer_str].put((torrent_hash, piece_idx))
+                        assigned_pieces.add(piece_idx)
+                        print(f"[DOWNLOAD DEBUG] Assigned piece {piece_idx} (rarity: {piece_rarity[piece_idx]}) to {peer_str}\n")
 
-            if not active_peers:
-                self.log_to_ui("[DOWNLOAD] No active peers available\n")
-                return
-
-            piece_rarity = {}
-            for idx in remaining_pieces:
-                count = sum(1 for p in active_peers if f"{p['ip']}:{p['port']}" in self.peer_comm.remote_bitfields and
-                            torrent_hash in self.peer_comm.remote_bitfields[f"{p['ip']}:{p['port']}"] and
-                            len(self.peer_comm.remote_bitfields[f"{p['ip']}:{p['port']}"][torrent_hash]) > idx and
-                            self.peer_comm.remote_bitfields[f"{p['ip']}:{p['port']}"][torrent_hash][idx] == 1)
-                piece_rarity[idx] = count if count > 0 else float('inf')
-
-            assigned_pieces = set()
-            for peer in active_peers:
-                peer_str = f"{peer['ip']}:{peer['port']}"
-                available_pieces = [
-                    idx for idx in remaining_pieces
-                    if peer_str in self.peer_comm.remote_bitfields and
-                    torrent_hash in self.peer_comm.remote_bitfields[peer_str] and
-                    len(self.peer_comm.remote_bitfields[peer_str][torrent_hash]) > idx and
-                    self.peer_comm.remote_bitfields[peer_str][torrent_hash][idx] == 1 and
-                    idx not in self.peer_comm.requested_pieces[torrent_hash] and
-                    idx not in assigned_pieces
-                ]
-                if available_pieces:
-                    min_rarity = min(piece_rarity[idx] for idx in available_pieces)
-                    rarest_pieces = [idx for idx in available_pieces if piece_rarity[idx] == min_rarity]
-                    piece_idx = random.choice(rarest_pieces)
-                    self.peer_comm.requested_pieces[torrent_hash].add(piece_idx)
-                    self.peer_comm.download_queues[peer_str].put((torrent_hash, piece_idx))
-                    assigned_pieces.add(piece_idx)
-                    print(f"[DOWNLOAD DEBUG] Assigned piece {piece_idx} (rarity: {piece_rarity[piece_idx]}) to {peer_str}\n")
-
-            for peer in active_peers:
-                peer_str = f"{peer['ip']}:{peer['port']}"
-                if peer_str in self.peer_comm.download_queues:
-                    self.peer_comm.download_queues[peer_str].join()
-
-            with self.lock:
-                for piece_idx in needed_pieces:
-                    piece_path = os.path.join(self.file_manager.downloads_dir, self.active_downloads[torrent_hash]["torrent_name"], f"piece_{piece_idx}")
-                    if os.path.exists(piece_path) and piece_idx in remaining_pieces:
-                        self.active_downloads[torrent_hash]["downloaded"].add(piece_idx)
-                        remaining_pieces.remove(piece_idx)
-
-            if not remaining_pieces:
-                self.log_to_ui("[+] All pieces downloaded\n")
-                success = self.file_manager.reconstruct_files(torrent_hash, self.active_downloads[torrent_hash]["torrent_name"])
-                if success:
-                    with self.lock:
-                        torrent_name = self.active_downloads[torrent_hash]["torrent_name"]
-                        metadata_path = os.path.join(self.file_manager.downloads_dir, torrent_name, f"{torrent_hash}_metadata.json")
-                        with open(metadata_path, "r") as f:
-                            metadata = json.load(f)
-                        if torrent_hash in self.shared_files:
-                            self.file_manager.cleanup_pieces(torrent_hash, torrent_name)
-                            del self.active_downloads[torrent_hash]
-                        else:
-                            self.shared_files[torrent_hash] = {
-                                "torrent_name": torrent_name,
-                                "pieces": metadata["pieces"],
-                                "size": sum(f["file_size"] for f in metadata["files"])
-                            }
-                            old_folder = os.path.join(self.file_manager.downloads_dir, torrent_name)
-                            new_folder = os.path.join(self.file_manager.shared_files_dir, torrent_name)
-                            if os.path.exists(old_folder):
-                                os.rename(old_folder, new_folder)
-                    # Schedule UI updates with a slight delay to prevent flooding
-                    self.root.after(100, self.update_shared_files_ui)
-                    self.root.after(200, self.update_status_ui)
-                    self.log_to_ui(f"[+] Download completed, now seeding {torrent_hash}\n")
-                # Signal download threads to exit
                 for peer in active_peers:
                     peer_str = f"{peer['ip']}:{peer['port']}"
                     if peer_str in self.peer_comm.download_queues:
-                        self.peer_comm.download_queues[peer_str].put(None)
+                        self.peer_comm.download_queues[peer_str].join()
 
-            current_peers = self.tracker.get_peers(torrent_hash, self.peer_id)
-            print(f"[DOWNLOAD DEBUG] Updated peers: {current_peers}\n")
+                with self.lock:
+                    for piece_idx in needed_pieces:
+                        piece_path = os.path.join(self.file_manager.downloads_dir, self.active_downloads[torrent_hash]["torrent_name"], f"piece_{piece_idx}")
+                        if os.path.exists(piece_path) and piece_idx in remaining_pieces:
+                            self.active_downloads[torrent_hash]["downloaded"].add(piece_idx)
+                            remaining_pieces.remove(piece_idx)
+
+                if not remaining_pieces:
+                    self.log_to_ui("[+] All pieces downloaded\n")
+                    success = self.file_manager.reconstruct_files(torrent_hash, self.active_downloads[torrent_hash]["torrent_name"])
+                    if success:
+                        with self.lock:
+                            torrent_name = self.active_downloads[torrent_hash]["torrent_name"]
+                            metadata_path = os.path.join(self.file_manager.downloads_dir, torrent_name, f"{torrent_hash}_metadata.json")
+                            with open(metadata_path, "r") as f:
+                                metadata = json.load(f)
+                            if torrent_hash in self.shared_files:
+                                self.file_manager.cleanup_pieces(torrent_hash, torrent_name)
+                                del self.active_downloads[torrent_hash]
+                            else:
+                                self.shared_files[torrent_hash] = {
+                                    "torrent_name": torrent_name,
+                                    "pieces": metadata["pieces"],
+                                    "size": sum(f["file_size"] for f in metadata["files"])
+                                }
+                                old_folder = os.path.join(self.file_manager.downloads_dir, torrent_name)
+                                new_folder = os.path.join(self.file_manager.shared_files_dir, torrent_name)
+                                if os.path.exists(old_folder):
+                                    os.rename(old_folder, new_folder)
+                        self.root.after(100, self.update_shared_files_ui)
+                        self.root.after(0, self.update_status_ui)
+                        self.log_to_ui(f"[+] Download completed, now seeding {torrent_hash}\n")
+
+                current_peers = self.tracker.get_peers(torrent_hash, self.peer_id)
+                print(f"[DOWNLOAD DEBUG] Updated peers: {current_peers}\n")
+
+        finally:
+            # Cleanup download threads
+            for peer in active_peers:
+                peer_str = f"{peer['ip']}:{peer['port']}"
+                if peer_str in self.peer_comm.download_queues:
+                    self.peer_comm.download_queues[peer_str].put(None)  # Signal thread to exit
+            for t in active_threads:
+                t.join(timeout=2)  # Wait for threads to finish with a timeout
+            # Clear download queues and threads for this torrent
+            with self.lock:
+                self.peer_comm.peer_threads = [t for t in self.peer_comm.peer_threads if t not in active_threads]
+                for peer in active_peers:
+                    peer_str = f"{peer['ip']}:{peer['port']}"
+                    if peer_str in self.peer_comm.download_queues:
+                        del self.peer_comm.download_queues[peer_str]
+                if torrent_hash in self.peer_comm.requested_pieces:
+                    del self.peer_comm.requested_pieces[torrent_hash]
+            print(f"[DOWNLOAD DEBUG] Cleaned up download threads for {torrent_hash}\n")
 
     def handle_discover(self):
         try:
@@ -1091,12 +1174,16 @@ class EnhancedPeer:
         self.log_to_ui("\n[+] Shutting down...\n")
         self.is_running = False
         self.peer_comm.is_running = False
+        # Signal all download threads to exit
         for peer in self.peer_comm.download_queues:
             self.peer_comm.download_queues[peer].put(None)
         self.peer_comm.upload_queue.put(None)
 
         self.tracker.clear_peer(self.peer_id)
         self.executor.shutdown(wait=False)
+        # Wait for download threads to finish
+        for t in self.peer_comm.peer_threads:
+            t.join(timeout=2)
         self.log_to_ui("[+] Peer stopped\n")
         self.root.quit()
 
@@ -1123,6 +1210,7 @@ if __name__ == "__main__":
                 peer_port = 8001
 
         peer = EnhancedPeer(peer_port=peer_port)
+        
         peer.start()
     except Exception as e:
         print(f"[!] Fatal error: {str(e)}\n")
