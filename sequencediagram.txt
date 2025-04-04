@@ -1,99 +1,65 @@
-# https://sequencediagram.org/
-
 @startuml
-actor User
+actor "User 1" as User1
+actor "User 2" as User2
+participant "Peer 1" as Peer1
 participant "Tracker" as Tracker
-participant "Peer1 (Seeder)" as Peer1
-participant "Peer2 (Leecher)" as Peer2
-participant "Peer3 (Leecher)" as Peer3
+participant "Peer 2" as Peer2
 
-== Initialization ==
-User -> Tracker: start_server()
-Tracker -> Tracker: Initialize (host=localhost, port=8000)
-User -> Peer1: start()
-Peer1 -> Peer1: listen_for_peers() [Thread]
-User -> Peer2: start()
-Peer2 -> Peer2: listen_for_peers() [Thread]
+== Khởi tạo và phát hiện Tracker ==
+User1 -> Peer1: Khởi động ứng dụng
+Peer1 -> Tracker: UDP Broadcast ("where_are_you")
+Tracker --> Peer1: UDP Response (IP, Port)
+note right: Peer 1 tự động phát hiện Tracker
 
-== Seeding (Peer1) ==
-User -> Peer1: seed("example.txt")
-Peer1 -> Peer1: split_file("example.txt") into seed/<torrent_hash>/piece_{i}
-note right: Pieces saved to disk
-Peer1 -> Peer1: calculate SHA-1 hashes
-Peer1 -> Tracker: HTTP GET /register?torrent_hash=<hash>&peer_id=<id>&port=6881
-Tracker -> Tracker: handle_registration(<hash>, <id>, ip=127.0.0.1, port=6881)
-Tracker -> Peer1: {status: "registered"}
-Peer1 -> User: "Seeding <torrent_hash>"
+User2 -> Peer2: Khởi động ứng dụng
+Peer2 -> Tracker: UDP Broadcast ("where_are_you")
+Tracker --> Peer2: UDP Response (IP, Port)
+note right: Peer 2 tự động phát hiện Tracker
 
-== Downloading (Peer2) ==
-User -> Peer2: download(<torrent_hash>, "downloaded_example.txt", piece_count=3)
-Peer2 -> Peer2: Initialize downloads6882/<torrent_hash>/piece_{i} paths
-Peer2 -> Tracker: HTTP GET /register?torrent_hash=<hash>&peer_id=<id>&port=6882
-Tracker -> Tracker: handle_registration(<hash>, <id>, ip=127.0.0.1, port=6882)
-Tracker -> Peer2: {status: "registered"}
-Peer2 -> Tracker: HTTP GET /get_peers?torrent_hash=<hash>
-Tracker -> Tracker: handle_get_peers(<hash>)
-Tracker -> Peer2: {peers: [{ip: "127.0.0.1", port: 6881}]}
-Peer2 -> Peer1: HANDSHAKE <torrent_hash>
-Peer1 -> Peer2: HANDSHAKE <torrent_hash> <peer_id>
-Peer2 -> Peer1: BITFIELD 0,0,0
-Peer1 -> Peer2: BITFIELD 1,1,1
-loop For each piece i (0 to 2)
-    Peer2 -> Peer1: REQUEST i
-    Peer1 -> Peer1: Read seed/<torrent_hash>/piece_{i}
-    Peer1 -> Peer2: Send piece_data
-    Peer2 -> Peer2: Write downloads6882/<torrent_hash>/piece_{i}
-    Peer2 -> Peer2: Update bitfield[i] = 1
+== Peer 1 chia sẻ tệp ==
+User1 -> Peer1: Nhập đường dẫn tệp và nhấn "Share"
+Peer1 -> Peer1: Chia tệp thành các mảnh (pieces) và tạo metadata
+Peer1 -> Tracker: HTTP POST (action: "share", metadata, peer_id, ip, port)
+Tracker --> Peer1: HTTP Response (status: "success", torrent_hash)
+note right: Tracker lưu thông tin torrent và Peer 1
+Peer1 -> Peer1: Cập nhật UI (hiển thị torrent đã chia sẻ)
+
+== Peer 2 khám phá và tải xuống tệp ==
+User2 -> Peer2: Nhấn "Discover"
+Peer2 -> Tracker: HTTP POST (action: "discover")
+Tracker --> Peer2: HTTP Response (danh sách torrents)
+Peer2 -> Peer2: Cập nhật UI (hiển thị danh sách torrents)
+
+User2 -> Peer2: Chọn torrent và nhấn "Download"
+Peer2 -> Tracker: HTTP POST (action: "get_metadata", torrent_hash)
+Tracker --> Peer2: HTTP Response (metadata)
+Peer2 -> Peer2: Lưu metadata cục bộ
+
+Peer2 -> Tracker: HTTP POST (action: "get_peers", torrent_hash)
+Tracker --> Peer2: HTTP Response (danh sách peers, bao gồm Peer 1)
+note right: Peer 2 nhận thông tin IP và port của Peer 1
+
+== Giao tiếp Peer-to-Peer ==
+Peer2 -> Peer1: TCP (PING, torrent_hash, bitfield)
+Peer1 --> Peer2: TCP (PONG, torrent_hash, bitfield)
+note right: Đồng bộ trạng thái mảnh giữa Peer 1 và Peer 2
+
+loop Cho mỗi mảnh cần tải
+    Peer2 -> Peer1: TCP (REQUEST, torrent_hash, piece_index)
+    Peer1 --> Peer2: TCP (Gửi dữ liệu mảnh)
+    Peer2 -> Peer2: Lưu mảnh vào thư mục downloads
 end
-Peer2 -> Peer2: periodic_peer_lookup(<torrent_hash>) [Thread]
 
-== Peer3 Joins ==
-User -> Peer3: start()
-Peer3 -> Peer3: listen_for_peers() [Thread]
-User -> Peer3: download(<torrent_hash>, "downloaded_example.txt", piece_count=3)
-Peer3 -> Peer3: Initialize downloads6883/<torrent_hash>/piece_{i} paths
-Peer3 -> Tracker: HTTP GET /register?torrent_hash=<hash>&peer_id=<id>&port=6883
-Tracker -> Tracker: handle_registration(<hash>, <id>, ip=127.0.0.1, port=6883)
-Tracker -> Peer3: {status: "registered"}
-Peer3 -> Tracker: HTTP GET /get_peers?torrent_hash=<hash>
-Tracker -> Tracker: handle_get_peers(<hash>)
-Tracker -> Peer3: {peers: [{ip: "127.0.0.1", port: 6881}, {ip: "127.0.0.1", port: 6882}]}
+== Hoàn tất tải xuống ==
+Peer2 -> Peer2: Kiểm tra toàn vẹn và tái tạo tệp
+Peer2 -> Tracker: HTTP POST (action: "update_status", status: "downloading")
+note right: Peer 2 thông báo đang tải để tiếp tục seeding
+Peer2 -> Peer2: Cập nhật UI (hiển thị trạng thái hoàn tất)
+User2 -> Peer2: Mở thư mục chứa tệp
 
-== Peer3 Downloads from Peer1 ==
-Peer3 -> Peer1: HANDSHAKE <torrent_hash>
-Peer1 -> Peer3: HANDSHAKE <torrent_hash> <peer_id>
-Peer3 -> Peer1: BITFIELD 0,0,0
-Peer1 -> Peer3: BITFIELD 1,1,1
-Peer3 -> Peer1: REQUEST 1
-Peer1 -> Peer1: Read seed/<torrent_hash>/piece_1
-Peer1 -> Peer3: Send piece_data
-Peer3 -> Peer3: Write downloads6883/<torrent_hash>/piece_1
-
-== Peer3 Downloads from Peer2 ==
-Peer3 -> Peer2: HANDSHAKE <torrent_hash>
-Peer2 -> Peer3: HANDSHAKE <torrent_hash> <peer_id>
-Peer3 -> Peer2: BITFIELD 0,1,0
-Peer2 -> Peer3: BITFIELD 1,1,1
-Peer3 -> Peer2: REQUEST 0
-Peer2 -> Peer2: Read downloads6882/<torrent_hash>/piece_0
-Peer2 -> Peer3: Send piece_data
-Peer3 -> Peer3: Write downloads6883/<torrent_hash>/piece_0
-
-== Peer2 Assembles File ==
-Peer2 -> Peer2: assemble_file(<torrent_hash>)
-loop For each piece i in downloads6882/<torrent_hash>/piece_{i}
-    Peer2 -> Peer2: Read piece_{i} and verify SHA-1
-    Peer2 -> Peer2: Write to downloads6882/downloaded_example.txt
-end
-Peer2 -> Tracker: HTTP GET /status?torrent_hash=<hash>&peer_id=<id>&status=completed
-Tracker -> Tracker: handle_status(<hash>, <id>, "completed")
-Tracker -> Peer2: {status: "completed"}
-
-== Shutdown ==
-User -> Peer2: exit()
-Peer2 -> Tracker: HTTP GET /status?torrent_hash=<hash>&peer_id=<id>&status=stopped
-Tracker -> Tracker: handle_status(<hash>, <id>, "stopped")
-Tracker -> Peer2: {status: "stopped"}
-Peer2 -> Peer2: running = False
+== Peer 2 chuyển sang seeding ==
+Peer2 -> Tracker: HTTP POST (action: "share", metadata, peer_id, ip, port)
+Tracker --> Peer2: HTTP Response (status: "success")
+note right: Peer 2 trở thành seeder cho torrent
 
 @enduml
